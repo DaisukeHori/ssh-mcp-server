@@ -1,0 +1,24 @@
+{
+  "name": "ssh-mcp-server",
+  "version": "1.0.0",
+  "description": "SSH client MCP server with session management for Claude.ai remote access via Streamable HTTP",
+  "main": "dist/index.js",
+  "type": "module",
+  "scripts": {
+    "build": "tsc",
+    "start": "node dist/index.js",
+    "dev": "tsc --watch"
+  },
+  "dependencies": {
+    "@modelcontextprotocol/sdk": "^1.12.1",
+    "express": "^4.21.2",
+    "ssh2": "^1.16.0",
+    "zod": "^3.24.4"
+  },
+  "devDependencies": {
+    "@types/express": "^5.0.2",
+    "@types/node": "^22.15.3",
+    "@types/ssh2": "^1.15.4",
+    "typescript": "^5.8.3"
+  }
+}
