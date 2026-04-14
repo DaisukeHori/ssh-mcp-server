@@ -1,243 +1,157 @@
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { z } from "zod";
-import { TokenStore } from "../services/token-store.js";
+import { KeyStore } from "../services/key-store.js";
 import { CallerContext } from "./ssh-tools.js";
 
 export function registerAdminTools(
   server: McpServer,
-  tokenStore: TokenStore,
+  keyStore: KeyStore,
   caller: CallerContext
 ): void {
+
   // ─────────────────────────────────────────────
-  // admin_token_create
+  // user_key_create (Admin only)
   // ─────────────────────────────────────────────
   server.registerTool(
-    "admin_token_create",
+    "user_key_create",
     {
-      title: "APIトークン発行",
-      description: `[ADMIN ONLY] Create a new API token for a user. Each token scopes SSH sessions to the token owner.
+      title: "User Key発行",
+      description: `[ADMIN ONLY] Create a new User Key. Give this key to a user so they can connect to the MCP server via ?key=xxx.
 
 Args:
-  - label (string): Human-readable label (e.g. "hori-claude", "tanaka-dev")
-  - is_admin (boolean, optional): Grant admin privileges (default: false)
-  - expires_in_days (number, optional): Token expiry in days (null = no expiry)
+  - label (string): Human-readable label (e.g. "hori", "tanaka-dev")
 
 Returns:
-  JSON with token id, full token string, and metadata. The token string is shown only once.`,
+  JSON with the full key string. Shown only once — save it.`,
       inputSchema: {
-        label: z.string().min(1).max(100).describe("Human-readable label for this token"),
-        is_admin: z.boolean().default(false).describe("Grant admin privileges (default: false)"),
-        expires_in_days: z
-          .number()
-          .int()
-          .min(1)
-          .max(365)
-          .optional()
-          .describe("Token expiry in days (omit for no expiry)"),
+        label: z.string().min(1).max(100).describe("Label for this user key"),
       },
       annotations: {
-        readOnlyHint: false,
-        destructiveHint: false,
-        idempotentHint: false,
-        openWorldHint: false,
+        readOnlyHint: false, destructiveHint: false,
+        idempotentHint: false, openWorldHint: false,
       },
     },
     async (params) => {
-      if (!caller.isAdmin) {
+      if (caller.role !== "admin") {
         return {
           isError: true,
-          content: [
-            {
-              type: "text",
-              text: "Permission denied: Only admin tokens can create new tokens.",
-            },
-          ],
+          content: [{ type: "text", text: "Permission denied: Admin Key required." }],
         };
       }
-
-      const token = tokenStore.create({
-        label: params.label,
-        isAdmin: params.is_admin,
-        expiresInDays: params.expires_in_days,
-      });
-
+      const uk = keyStore.createUserKey(params.label);
       return {
-        content: [
-          {
-            type: "text",
-            text: JSON.stringify(
-              {
-                id: token.id,
-                token: token.token,
-                label: token.label,
-                isAdmin: token.isAdmin,
-                createdAt: token.createdAt,
-                expiresAt: token.expiresAt,
-                message:
-                  "⚠️ IMPORTANT: Save this token now! The full token string will NOT be shown again.",
-              },
-              null,
-              2
-            ),
-          },
-        ],
+        content: [{ type: "text", text: JSON.stringify({
+          key: uk.key,
+          label: uk.label,
+          createdAt: uk.createdAt,
+          message: "⚠️ Save this key now. The full key is shown only once.",
+        }, null, 2) }],
       };
     }
   );
 
   // ─────────────────────────────────────────────
-  // admin_token_list
+  // user_key_list (Admin only)
   // ─────────────────────────────────────────────
   server.registerTool(
-    "admin_token_list",
+    "user_key_list",
     {
-      title: "APIトークン一覧",
-      description: `[ADMIN ONLY] List all API tokens with redacted token strings.
+      title: "User Key一覧",
+      description: `[ADMIN ONLY] List all User Keys.
 
 Returns:
-  JSON array of tokens with id, preview, label, isAdmin, timestamps, and expiry.`,
+  JSON array of user keys with key, label, timestamps.`,
       inputSchema: {},
       annotations: {
-        readOnlyHint: true,
-        destructiveHint: false,
-        idempotentHint: true,
-        openWorldHint: false,
+        readOnlyHint: true, destructiveHint: false,
+        idempotentHint: true, openWorldHint: false,
       },
     },
     async () => {
-      if (!caller.isAdmin) {
+      if (caller.role !== "admin") {
         return {
           isError: true,
-          content: [
-            {
-              type: "text",
-              text: "Permission denied: Only admin tokens can list tokens.",
-            },
-          ],
+          content: [{ type: "text", text: "Permission denied: Admin Key required." }],
         };
       }
-
-      const tokens = tokenStore.list();
+      const keys = keyStore.listUserKeys();
       return {
-        content: [
-          {
-            type: "text",
-            text: JSON.stringify({ total: tokens.length, tokens }, null, 2),
-          },
-        ],
+        content: [{ type: "text", text: JSON.stringify({
+          total: keys.length,
+          keys: keys.map((k) => ({
+            key: k.key.slice(0, 12) + "..." + k.key.slice(-4),
+            key_full: k.key,
+            label: k.label,
+            createdAt: k.createdAt,
+            lastUsedAt: k.lastUsedAt,
+          })),
+        }, null, 2) }],
       };
     }
   );
 
   // ─────────────────────────────────────────────
-  // admin_token_revoke
+  // user_key_delete (Admin only)
   // ─────────────────────────────────────────────
   server.registerTool(
-    "admin_token_revoke",
+    "user_key_delete",
     {
-      title: "APIトークン失効",
-      description: `[ADMIN ONLY] Revoke an API token by its ID. All SSH sessions owned by this token will continue until they expire, but no new operations can be performed.
+      title: "User Key削除",
+      description: `[ADMIN ONLY] Delete a User Key. Sessions created by this key will remain active until their TTL expires.
 
 Args:
-  - token_id (string): Token ID to revoke (e.g. "tok_0001")`,
+  - key (string): The full User Key string to delete`,
       inputSchema: {
-        token_id: z.string().min(1).describe("Token ID to revoke (e.g. 'tok_0001')"),
+        key: z.string().min(1).describe("Full User Key string to delete"),
       },
       annotations: {
-        readOnlyHint: false,
-        destructiveHint: true,
-        idempotentHint: true,
-        openWorldHint: false,
+        readOnlyHint: false, destructiveHint: true,
+        idempotentHint: true, openWorldHint: false,
       },
     },
     async (params) => {
-      if (!caller.isAdmin) {
+      if (caller.role !== "admin") {
         return {
           isError: true,
-          content: [
-            {
-              type: "text",
-              text: "Permission denied: Only admin tokens can revoke tokens.",
-            },
-          ],
+          content: [{ type: "text", text: "Permission denied: Admin Key required." }],
         };
       }
-
-      // Prevent revoking own token
-      if (params.token_id === caller.tokenId) {
+      const deleted = keyStore.deleteUserKey(params.key);
+      if (deleted) {
         return {
-          isError: true,
-          content: [
-            {
-              type: "text",
-              text: "Cannot revoke your own admin token. Use another admin token to revoke this one.",
-            },
-          ],
+          content: [{ type: "text", text: JSON.stringify({ deleted: true, remaining: keyStore.userKeyCount }) }],
         };
       }
-
-      const success = tokenStore.revoke(params.token_id);
-      if (success) {
-        return {
-          content: [
-            {
-              type: "text",
-              text: JSON.stringify({
-                revoked: params.token_id,
-                remaining_tokens: tokenStore.tokenCount,
-              }),
-            },
-          ],
-        };
-      } else {
-        return {
-          isError: true,
-          content: [
-            {
-              type: "text",
-              text: `Token '${params.token_id}' not found.`,
-            },
-          ],
-        };
-      }
+      return {
+        isError: true,
+        content: [{ type: "text", text: "User Key not found." }],
+      };
     }
   );
 
   // ─────────────────────────────────────────────
-  // admin_whoami
+  // whoami (all keys)
   // ─────────────────────────────────────────────
   server.registerTool(
-    "admin_whoami",
+    "whoami",
     {
-      title: "現在のトークン情報",
-      description: `Show information about the current API token being used. Available to all tokens.
+      title: "現在のキー情報",
+      description: `Show info about the current API key.
 
 Returns:
-  JSON with token id, label, isAdmin status.`,
+  JSON with role, label.`,
       inputSchema: {},
       annotations: {
-        readOnlyHint: true,
-        destructiveHint: false,
-        idempotentHint: true,
-        openWorldHint: false,
+        readOnlyHint: true, destructiveHint: false,
+        idempotentHint: true, openWorldHint: false,
       },
     },
     async () => {
       return {
-        content: [
-          {
-            type: "text",
-            text: JSON.stringify(
-              {
-                token_id: caller.tokenId,
-                label: caller.label,
-                is_admin: caller.isAdmin,
-              },
-              null,
-              2
-            ),
-          },
-        ],
+        content: [{ type: "text", text: JSON.stringify({
+          role: caller.role,
+          label: caller.label,
+        }, null, 2) }],
       };
     }
   );

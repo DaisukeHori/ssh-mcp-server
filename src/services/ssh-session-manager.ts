@@ -1,16 +1,18 @@
 import { Client, ConnectConfig, ClientChannel } from "ssh2";
+import { randomBytes, createHash } from "crypto";
 import { Readable } from "stream";
 
 export interface SSHSession {
-  id: string;
-  ownerId: string; // Token ID that owns this session
+  token: string;         // SHA-256 capability token
+  ownerKey: string;      // User Key that created this session
   client: Client;
   host: string;
   port: number;
   username: string;
-  connectedAt: Date;
-  lastUsedAt: Date;
   label?: string;
+  createdAt: Date;
+  lastUsedAt: Date;
+  everUsed: boolean;     // true if ssh_execute/upload/download was called at least once
 }
 
 export interface ConnectOptions {
@@ -21,7 +23,7 @@ export interface ConnectOptions {
   privateKey?: string;
   passphrase?: string;
   label?: string;
-  ownerId: string; // Token ID
+  ownerKey: string;
 }
 
 export interface ExecResult {
@@ -31,45 +33,49 @@ export interface ExecResult {
   durationMs: number;
 }
 
-const SESSION_TTL_MS = 30 * 60 * 1000; // 30 minutes
-const CLEANUP_INTERVAL_MS = 60 * 1000; // Check every minute
-const DEFAULT_EXEC_TIMEOUT_MS = 120 * 1000; // 2 minutes
-const MAX_OUTPUT_BYTES = 512 * 1024; // 512 KB max output
+// TTLs
+const TTL_UNUSED_MS = 24 * 60 * 60 * 1000;            // 1 day for never-used sessions
+const TTL_USED_MS = 90 * 24 * 60 * 60 * 1000;         // 3 months for used sessions
+const CLEANUP_INTERVAL_MS = 5 * 60 * 1000;             // Check every 5 minutes
+const DEFAULT_EXEC_TIMEOUT_MS = 120 * 1000;            // 2 minutes
+const MAX_OUTPUT_BYTES = 512 * 1024;                    // 512 KB
+
+function generateSessionToken(): string {
+  const raw = randomBytes(32);
+  return "sess_" + createHash("sha256").update(raw).digest("hex");
+}
 
 export class SSHSessionManager {
-  private sessions: Map<string, SSHSession> = new Map();
+  private sessions: Map<string, SSHSession> = new Map(); // keyed by token
   private cleanupTimer: NodeJS.Timeout | null = null;
-  private sessionCounter = 0;
 
   constructor() {
     this.startCleanup();
   }
 
   private startCleanup(): void {
-    this.cleanupTimer = setInterval(() => {
-      this.cleanupExpiredSessions();
-    }, CLEANUP_INTERVAL_MS);
+    this.cleanupTimer = setInterval(() => this.cleanupExpired(), CLEANUP_INTERVAL_MS);
   }
 
-  private cleanupExpiredSessions(): void {
+  private cleanupExpired(): void {
     const now = Date.now();
-    for (const [id, session] of this.sessions) {
-      if (now - session.lastUsedAt.getTime() > SESSION_TTL_MS) {
-        console.error(`[SSHSessionManager] Session ${id} expired (idle ${Math.round((now - session.lastUsedAt.getTime()) / 1000)}s), disconnecting`);
-        this.disconnect(id);
+    for (const [token, session] of this.sessions) {
+      const ttl = session.everUsed ? TTL_USED_MS : TTL_UNUSED_MS;
+      const elapsed = now - session.lastUsedAt.getTime();
+      if (elapsed > ttl) {
+        console.error(
+          `[SSHSessionManager] Session ${token.slice(0, 16)}... expired ` +
+          `(${session.everUsed ? "used" : "unused"}, idle ${Math.round(elapsed / 1000)}s)`
+        );
+        this.forceDisconnect(token);
       }
     }
   }
 
-  private generateSessionId(): string {
-    this.sessionCounter++;
-    const ts = Date.now().toString(36);
-    const seq = this.sessionCounter.toString(36).padStart(3, "0");
-    return `ssh-${ts}-${seq}`;
-  }
+  // ─── Connect ────────────────────────────────
 
   async connect(options: ConnectOptions): Promise<SSHSession> {
-    const sessionId = this.generateSessionId();
+    const token = generateSessionToken();
     const client = new Client();
 
     const config: ConnectConfig = {
@@ -77,15 +83,13 @@ export class SSHSessionManager {
       port: options.port ?? 22,
       username: options.username,
       readyTimeout: 15000,
-      keepaliveInterval: 10000,
-      keepaliveCountMax: 3,
+      keepaliveInterval: 30000,
+      keepaliveCountMax: 6,
     };
 
     if (options.privateKey) {
       config.privateKey = options.privateKey;
-      if (options.passphrase) {
-        config.passphrase = options.passphrase;
-      }
+      if (options.passphrase) config.passphrase = options.passphrase;
     } else if (options.password) {
       config.password = options.password;
     } else {
@@ -101,18 +105,22 @@ export class SSHSessionManager {
       client.on("ready", () => {
         clearTimeout(timeout);
         const session: SSHSession = {
-          id: sessionId,
-          ownerId: options.ownerId,
+          token,
+          ownerKey: options.ownerKey,
           client,
           host: options.host,
           port: options.port ?? 22,
           username: options.username,
-          connectedAt: new Date(),
-          lastUsedAt: new Date(),
           label: options.label,
+          createdAt: new Date(),
+          lastUsedAt: new Date(),
+          everUsed: false,
         };
-        this.sessions.set(sessionId, session);
-        console.error(`[SSHSessionManager] Session ${sessionId} connected to ${options.username}@${options.host}:${options.port ?? 22}`);
+        this.sessions.set(token, session);
+        console.error(
+          `[SSHSessionManager] New session ${token.slice(0, 16)}... → ` +
+          `${options.username}@${options.host}:${options.port ?? 22}`
+        );
         resolve(session);
       });
 
@@ -122,9 +130,9 @@ export class SSHSessionManager {
       });
 
       client.on("close", () => {
-        if (this.sessions.has(sessionId)) {
-          console.error(`[SSHSessionManager] Session ${sessionId} closed unexpectedly`);
-          this.sessions.delete(sessionId);
+        if (this.sessions.has(token)) {
+          console.error(`[SSHSessionManager] Session ${token.slice(0, 16)}... closed unexpectedly`);
+          this.sessions.delete(token);
         }
       });
 
@@ -132,31 +140,15 @@ export class SSHSessionManager {
     });
   }
 
-  /**
-   * Resolve a session by ID with ownership check.
-   * Admin tokens can access any session. Regular tokens can only access their own.
-   */
-  private resolveSession(sessionId: string, ownerId: string, isAdmin: boolean): SSHSession {
-    const session = this.sessions.get(sessionId);
-    if (!session) {
-      throw new Error(`Session '${sessionId}' not found. Use ssh_list_sessions to see active sessions, or ssh_connect to create a new one.`);
-    }
-    if (!isAdmin && session.ownerId !== ownerId) {
-      throw new Error(`Session '${sessionId}' belongs to another token. You can only access your own sessions.`);
-    }
-    return session;
-  }
+  // ─── Execute ────────────────────────────────
 
   async execute(
-    sessionId: string,
+    token: string,
     command: string,
-    ownerId: string,
-    isAdmin: boolean,
     timeoutMs: number = DEFAULT_EXEC_TIMEOUT_MS
   ): Promise<ExecResult> {
-    const session = this.resolveSession(sessionId, ownerId, isAdmin);
-
-    session.lastUsedAt = new Date();
+    const session = this.getSessionByToken(token);
+    this.markUsed(session);
 
     return new Promise<ExecResult>((resolve, reject) => {
       const startTime = Date.now();
@@ -166,11 +158,9 @@ export class SSHSessionManager {
       let stderrTruncated = false;
 
       const timer = setTimeout(() => {
-        reject(
-          new Error(
-            `Command timed out after ${timeoutMs / 1000}s. Consider increasing timeout or breaking the command into smaller parts.`
-          )
-        );
+        reject(new Error(
+          `Command timed out after ${timeoutMs / 1000}s. Increase timeout_ms or split the command.`
+        ));
       }, timeoutMs);
 
       session.client.exec(command, (err: Error | undefined, stream: ClientChannel) => {
@@ -202,174 +192,147 @@ export class SSHSessionManager {
 
         stream.on("close", (code: number | null) => {
           clearTimeout(timer);
-          const durationMs = Date.now() - startTime;
-
-          if (stdoutTruncated) {
-            stdoutBuf += "\n\n--- OUTPUT TRUNCATED (exceeded 512KB) ---";
-          }
-          if (stderrTruncated) {
-            stderrBuf += "\n\n--- STDERR TRUNCATED (exceeded 512KB) ---";
-          }
-
+          if (stdoutTruncated) stdoutBuf += "\n\n--- OUTPUT TRUNCATED (>512KB) ---";
+          if (stderrTruncated) stderrBuf += "\n\n--- STDERR TRUNCATED (>512KB) ---";
           resolve({
             exitCode: code ?? -1,
             stdout: stdoutBuf,
             stderr: stderrBuf,
-            durationMs,
+            durationMs: Date.now() - startTime,
           });
         });
       });
     });
   }
 
-  async uploadFile(
-    sessionId: string,
-    localContent: string,
-    remotePath: string,
-    ownerId: string,
-    isAdmin: boolean
-  ): Promise<void> {
-    const session = this.resolveSession(sessionId, ownerId, isAdmin);
+  // ─── File Operations ────────────────────────
 
-    session.lastUsedAt = new Date();
+  async uploadFile(token: string, content: string, remotePath: string): Promise<void> {
+    const session = this.getSessionByToken(token);
+    this.markUsed(session);
 
     return new Promise<void>((resolve, reject) => {
       session.client.sftp((err, sftp) => {
-        if (err) {
-          reject(new Error(`SFTP init failed: ${err.message}`));
-          return;
-        }
-
-        const writeStream = sftp.createWriteStream(remotePath);
-        writeStream.on("close", () => {
-          sftp.end();
-          resolve();
-        });
-        writeStream.on("error", (writeErr: Error) => {
-          sftp.end();
-          reject(new Error(`File upload failed: ${writeErr.message}`));
-        });
-
-        const readable = Readable.from([Buffer.from(localContent, "utf-8")]);
-        readable.pipe(writeStream);
+        if (err) { reject(new Error(`SFTP init failed: ${err.message}`)); return; }
+        const ws = sftp.createWriteStream(remotePath);
+        ws.on("close", () => { sftp.end(); resolve(); });
+        ws.on("error", (e: Error) => { sftp.end(); reject(new Error(`Upload failed: ${e.message}`)); });
+        Readable.from([Buffer.from(content, "utf-8")]).pipe(ws);
       });
     });
   }
 
-  async downloadFile(
-    sessionId: string,
-    remotePath: string,
-    ownerId: string,
-    isAdmin: boolean
-  ): Promise<string> {
-    const session = this.resolveSession(sessionId, ownerId, isAdmin);
-
-    session.lastUsedAt = new Date();
+  async downloadFile(token: string, remotePath: string): Promise<string> {
+    const session = this.getSessionByToken(token);
+    this.markUsed(session);
 
     return new Promise<string>((resolve, reject) => {
       session.client.sftp((err, sftp) => {
-        if (err) {
-          reject(new Error(`SFTP init failed: ${err.message}`));
-          return;
-        }
-
+        if (err) { reject(new Error(`SFTP init failed: ${err.message}`)); return; }
         let content = "";
-        const readStream = sftp.createReadStream(remotePath);
-
-        readStream.on("data", (data: Buffer) => {
+        const rs = sftp.createReadStream(remotePath);
+        rs.on("data", (data: Buffer) => {
           content += data.toString("utf-8");
           if (content.length > MAX_OUTPUT_BYTES) {
-            readStream.destroy();
-            sftp.end();
-            reject(
-              new Error(
-                `File too large (>512KB). Use ssh_execute with 'head' or 'tail' to read portions.`
-              )
-            );
+            rs.destroy(); sftp.end();
+            reject(new Error("File too large (>512KB). Use ssh_execute with head/tail."));
           }
         });
-
-        readStream.on("end", () => {
-          sftp.end();
-          resolve(content);
-        });
-
-        readStream.on("error", (readErr: Error) => {
-          sftp.end();
-          reject(new Error(`File download failed: ${readErr.message}`));
-        });
+        rs.on("end", () => { sftp.end(); resolve(content); });
+        rs.on("error", (e: Error) => { sftp.end(); reject(new Error(`Download failed: ${e.message}`)); });
       });
     });
   }
 
-  disconnect(sessionId: string, ownerId?: string, isAdmin?: boolean): boolean {
-    const session = this.sessions.get(sessionId);
-    if (!session) {
-      return false;
-    }
+  // ─── Disconnect ─────────────────────────────
 
-    // If ownerId is provided, check ownership (unless admin)
-    if (ownerId && !isAdmin && session.ownerId !== ownerId) {
-      return false;
-    }
+  /**
+   * Disconnect by session token. Returns true if found and disconnected.
+   */
+  disconnect(token: string): boolean {
+    return this.forceDisconnect(token);
+  }
 
-    try {
-      session.client.end();
-    } catch {
-      // Ignore errors on disconnect
-    }
-    this.sessions.delete(sessionId);
-    console.error(`[SSHSessionManager] Session ${sessionId} disconnected`);
+  private forceDisconnect(token: string): boolean {
+    const session = this.sessions.get(token);
+    if (!session) return false;
+    try { session.client.end(); } catch { /* ignore */ }
+    this.sessions.delete(token);
+    console.error(`[SSHSessionManager] Disconnected ${token.slice(0, 16)}...`);
     return true;
   }
 
-  disconnectAll(ownerId?: string, isAdmin?: boolean): number {
+  /**
+   * Disconnect all sessions owned by a specific User Key.
+   * If ownerKey is undefined, disconnect ALL (admin use).
+   */
+  disconnectByOwner(ownerKey?: string): number {
     let count = 0;
-    for (const [id, session] of this.sessions) {
-      // If scoped, only disconnect own sessions (unless admin)
-      if (ownerId && !isAdmin && session.ownerId !== ownerId) {
-        continue;
-      }
-      if (this.disconnect(id)) {
-        count++;
+    for (const [token, session] of this.sessions) {
+      if (!ownerKey || session.ownerKey === ownerKey) {
+        if (this.forceDisconnect(token)) count++;
       }
     }
     return count;
   }
 
-  listSessions(ownerId?: string, isAdmin?: boolean): Array<{
-    id: string;
-    ownerId: string;
+  // ─── List ───────────────────────────────────
+
+  /**
+   * List sessions. If ownerKey is provided, filter by owner.
+   * If showAll is true (admin), show everything.
+   */
+  listSessions(ownerKey?: string, showAll?: boolean): Array<{
+    session_token: string;
     host: string;
     port: number;
     username: string;
-    connectedAt: string;
-    lastUsedAt: string;
-    idleSeconds: number;
     label?: string;
+    createdAt: string;
+    lastUsedAt: string;
+    everUsed: boolean;
+    idleSeconds: number;
+    ttlDescription: string;
   }> {
     const now = Date.now();
     return Array.from(this.sessions.values())
-      .filter((s) => {
-        if (!ownerId) return true; // No scope = show all
-        if (isAdmin) return true; // Admin sees all
-        return s.ownerId === ownerId;
-      })
-      .map((s) => ({
-        id: s.id,
-        ownerId: s.ownerId,
-        host: s.host,
-        port: s.port,
-        username: s.username,
-        connectedAt: s.connectedAt.toISOString(),
-        lastUsedAt: s.lastUsedAt.toISOString(),
-        idleSeconds: Math.round((now - s.lastUsedAt.getTime()) / 1000),
-        ...(s.label ? { label: s.label } : {}),
-      }));
+      .filter((s) => showAll || (ownerKey && s.ownerKey === ownerKey))
+      .map((s) => {
+        const idle = Math.round((now - s.lastUsedAt.getTime()) / 1000);
+        const ttl = s.everUsed ? TTL_USED_MS : TTL_UNUSED_MS;
+        const remainingSec = Math.max(0, Math.round((ttl - (now - s.lastUsedAt.getTime())) / 1000));
+        return {
+          session_token: s.token,
+          host: s.host,
+          port: s.port,
+          username: s.username,
+          ...(s.label ? { label: s.label } : {}),
+          createdAt: s.createdAt.toISOString(),
+          lastUsedAt: s.lastUsedAt.toISOString(),
+          everUsed: s.everUsed,
+          idleSeconds: idle,
+          ttlDescription: s.everUsed
+            ? `${remainingSec}s remaining (3-month TTL)`
+            : `${remainingSec}s remaining (1-day TTL, use to extend)`,
+        };
+      });
   }
 
-  getSession(sessionId: string): SSHSession | undefined {
-    return this.sessions.get(sessionId);
+  // ─── Helpers ────────────────────────────────
+
+  private getSessionByToken(token: string): SSHSession {
+    const session = this.sessions.get(token);
+    if (!session) {
+      throw new Error(
+        `Session token not found or expired. Use ssh_connect to create a new session.`
+      );
+    }
+    return session;
+  }
+
+  private markUsed(session: SSHSession): void {
+    session.lastUsedAt = new Date();
+    session.everUsed = true;
   }
 
   get sessionCount(): number {
@@ -381,6 +344,6 @@ export class SSHSessionManager {
       clearInterval(this.cleanupTimer);
       this.cleanupTimer = null;
     }
-    this.disconnectAll();
+    this.disconnectByOwner(); // disconnect all
   }
 }

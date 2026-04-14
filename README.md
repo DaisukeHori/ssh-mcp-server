@@ -1,162 +1,110 @@
-# SSH MCP Server
+# SSH MCP Server v2
 
-Claude.ai からローカルネットワーク上の任意のサーバーに SSH 接続するための MCP (Model Context Protocol) サーバー。
+Claude.ai からローカルネットワーク上の任意のサーバーに SSH 接続するための MCP サーバー。
 
 ## アーキテクチャ
 
 ```
-Claude.ai User A ──┐                    
-Claude.ai User B ──┤  HTTPS (Anthropic Cloud)
-Claude.ai User C ──┘
-    │
-    ▼
-Cloudflare Tunnel (ssh-mcp.appserver.tokyo)
-    │
-    ▼
-┌────────────────────────────────────────┐
-│  LXC Container (ssh-mcp)              │
-│                                        │
-│  ┌──────────────┐  ┌───────────────┐  │
-│  │ Token Store   │  │ SSH Session   │  │
-│  │ (tokens.json) │  │ Manager       │  │
-│  │               │  │               │  │
-│  │ tok_0001 Admin│  │ User A → ssh1 │  │
-│  │ tok_0002 UserA│  │ User A → ssh2 │  │
-│  │ tok_0003 UserB│  │ User B → ssh3 │  │
-│  └──────────────┘  └───────┬───────┘  │
-└────────────────────────────┼──────────┘
-                             │ SSH (port 22)
-                             ▼
-                    ┌──────────────┐
-                    │ Proxmox Host │
-                    │ LXC / VM     │
-                    │ NAS / etc    │
-                    └──────────────┘
+Claude.ai (User A)  →  ?key=uk_xxx  →  ssh_connect → sess_abc123...
+Claude.ai (User B)  →  ?key=uk_yyy  →  ssh_execute(sess_abc123) ← 共有可
+Claude.ai (Admin)   →  ?key=ak_xxx  →  ssh_list_sessions (全ユーザー)
+         │
+         ▼
+ Cloudflare Tunnel (HTTPS)
+         │
+         ▼
+ ┌───────────────────────────────────────┐
+ │  LXC: ssh-mcp-server                 │
+ │                                       │
+ │  ?key= ──→ KeyStore ──→ CallerContext │
+ │                                       │
+ │  session_token (SHA-256)              │
+ │  = capability token (持ってれば使える) │
+ │                                       │
+ │  TTL: 未使用→1日 / 使用済→3ヶ月      │
+ └───────────────┬───────────────────────┘
+                 │ SSH
+                 ▼
+         ローカルネットワーク
 ```
 
-## マルチユーザー & トークン管理
+## ツール一覧 (10)
 
-OpenAI Assistants API の Thread パターンに似た設計:
+### SSH操作
 
-1. **初回起動時**: Adminトークンが自動生成される（ログに表示、1回限り）
-2. **Admin** が `admin_token_create` で各ユーザー用トークンを発行
-3. **各ユーザー** は自分のトークンでClaude.aiのカスタムコネクターを登録
-4. **SSHセッション** はトークン単位でスコープ（他ユーザーのセッションは見えない）
-5. **Admin** は全セッションの閲覧・操作が可能
+| ツール | Admin | User | session_token | 説明 |
+|--------|:-----:|:----:|:-------------:|------|
+| `ssh_connect` | ✗ | ✓ | — | SSH接続 → session_token返却 |
+| `ssh_execute` | ✓ | ✓ | 必要 | コマンド実行 |
+| `ssh_disconnect` | ✓ | ✓ | 必要 | セッション切断 |
+| `ssh_list_sessions` | ✓全部 | ✓自分 | — | セッション一覧 |
+| `ssh_upload_file` | ✓ | ✓ | 必要 | ファイルアップロード |
+| `ssh_download_file` | ✓ | ✓ | 必要 | ファイルダウンロード |
 
-## ツール一覧 (10ツール)
+### 管理
 
-### SSH操作 (全ユーザー)
+| ツール | Admin | User | 説明 |
+|--------|:-----:|:----:|------|
+| `user_key_create` | ✓ | ✗ | User Key発行 |
+| `user_key_list` | ✓ | ✗ | User Key一覧 |
+| `user_key_delete` | ✓ | ✗ | User Key削除 |
+| `whoami` | ✓ | ✓ | 現在のキー情報 |
 
-| ツール | 説明 |
-|--------|------|
-| `ssh_connect` | SSH接続を確立。session_idを返す |
-| `ssh_execute` | コマンド実行（最大10分タイムアウト） |
-| `ssh_disconnect` | セッションを切断（個別 or 全切断） |
-| `ssh_list_sessions` | 自分のアクティブセッション一覧 |
-| `ssh_upload_file` | SFTPでテキストファイル送信 |
-| `ssh_download_file` | SFTPでテキストファイル取得 |
+## 認証モデル
 
-### 管理 (Admin専用 + 共通)
+```
+                  ┌────────────┐
+                  │  ?key=xxx  │  URL パラメータ
+                  └──────┬─────┘
+                         │
+              ┌──────────┴──────────┐
+              ▼                     ▼
+        Admin Key              User Key
+        (env: ADMIN_KEY)       (user-keys.json)
+              │                     │
+              │               ssh_connect()
+              │                     │
+              │                     ▼
+              │              session_token
+              │              (SHA-256, 共有可能)
+              │                     │
+              ▼                     ▼
+        全セッション操作     トークン保持者が操作
+```
 
-| ツール | 説明 |
-|--------|------|
-| `admin_token_create` | 🔒 新しいAPIトークンを発行 |
-| `admin_token_list` | 🔒 全トークン一覧（トークン文字列は部分表示） |
-| `admin_token_revoke` | 🔒 トークンを失効 |
-| `admin_whoami` | 現在のトークン情報を表示 |
+## TTL
 
-## セッション管理
+| 状態 | TTL |
+|------|-----|
+| 作成後 ssh_execute/upload/download 未実行 | 最終使用から **1日** |
+| ssh_execute/upload/download を1回以上実行 | 最終使用から **3ヶ月** |
 
-- SSH接続はサーバー側でインメモリにプール
-- `session_id` + `token_id` でセッションをスコープ
-- 30分間アイドル状態のセッションは自動切断
-- Keepalive (10秒間隔) で接続を維持
+※ サーバー再起動で全セッション破棄（session_tokenは無効化）
 
-## デプロイ手順
-
-### 1. LXCにデプロイ
+## セットアップ
 
 ```bash
-# LXC内で
-apt update && apt install -y curl git
-curl -fsSL https://deb.nodesource.com/setup_22.x | bash -
-apt install -y nodejs
+# 1. クローン & ビルド
+git clone https://github.com/DaisukeHori/ssh-mcp-server.git
+cd ssh-mcp-server && npm install && npx tsc
 
-git clone https://github.com/DaisukeHori/ssh-mcp-server.git /opt/ssh-mcp-server
-cd /opt/ssh-mcp-server
-npm install
-npx tsc
-
-# 初回起動（Adminトークンが表示される）
+# 2. Admin Key生成 & 起動
+export ADMIN_KEY=$(openssl rand -hex 32)
+echo "Admin Key: $ADMIN_KEY"  # 保存！
 node dist/index.js
-# → 表示されたトークンを保存！
-```
 
-### 2. systemdサービス
-
-```bash
-cat > /etc/systemd/system/ssh-mcp-server.service << 'EOF'
-[Unit]
-Description=SSH MCP Server
-After=network.target
-
-[Service]
-Type=simple
-WorkingDirectory=/opt/ssh-mcp-server
-Environment=PORT=3000
-ExecStart=/usr/bin/node dist/index.js
-Restart=always
-RestartSec=5
-
-[Install]
-WantedBy=multi-user.target
-EOF
-
-systemctl enable --now ssh-mcp-server
-```
-
-### 3. Cloudflare Tunnel設定
-
-`cloudflared` の config.yml に追加:
-
-```yaml
-ingress:
-  - hostname: ssh-mcp.appserver.tokyo
-    service: http://localhost:3000
-```
-
-### 4. Claude.aiでコネクター登録
-
-1. Claude.ai → 設定 → コネクター → カスタムコネクターを追加
-2. URL: `https://ssh-mcp.appserver.tokyo/mcp`
-3. 認証ヘッダー設定で Bearer Token を入力
-
-## トークン運用フロー
-
-```
-[Admin] Claude.ai →  admin_token_create(label="tanaka", is_admin=false)
-                     → tok_0002: sshm_abc123...  ← これをtanakaさんに渡す
-
-[tanaka] Claude.ai → 設定 → コネクター → URL + Bearer sshm_abc123...
-                   → ssh_connect(host="192.168.70.226", username="root", password="xxx")
-                   → ssh_execute(session_id="ssh-xxx-001", command="pct list")
+# 3. Claude.ai コネクター登録
+#    URL: https://ssh-mcp.appserver.tokyo/mcp?key=<ADMIN_KEY>
+#    (User Keyを発行したら、そのkeyで別コネクターを追加)
 ```
 
 ## 環境変数
 
-| 変数名 | デフォルト | 説明 |
-|--------|-----------|------|
-| `PORT` | `3000` | HTTPサーバーのポート |
-| `DATA_DIR` | `cwd()` | tokens.jsonの保存先 |
-
-## セキュリティ考慮事項
-
-- トークンは `sshm_` + 64文字のランダム hex
-- tokens.json にハッシュではなく平文で保存（LXC内部のみアクセス前提）
-- Cloudflare Tunnel経由のみでアクセス（直接ポート公開しない）
-- SSHパスワード/鍵はMCPリクエストで毎回送信（サーバー側に保存しない）
-- セッションはインメモリのみ（再起動で全消去、トークンは永続）
+| 変数名 | 必須 | 説明 |
+|--------|:----:|------|
+| `ADMIN_KEY` | ✓ | 管理者APIキー |
+| `PORT` | — | HTTPポート (default: 3000) |
+| `DATA_DIR` | — | user-keys.json保存先 (default: cwd) |
 
 ## ライセンス
 
