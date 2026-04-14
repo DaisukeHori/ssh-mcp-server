@@ -320,6 +320,46 @@ export class SSHSessionManager {
 
   // ─── Helpers ────────────────────────────────
 
+  /**
+   * List sessions owned by any of the given keys (union).
+   */
+  listSessionsByKeys(ownerKeys: string[]): Array<{
+    session_token: string;
+    host: string;
+    port: number;
+    username: string;
+    label?: string;
+    createdAt: string;
+    lastUsedAt: string;
+    everUsed: boolean;
+    idleSeconds: number;
+    ttlDescription: string;
+  }> {
+    const keySet = new Set(ownerKeys);
+    const now = Date.now();
+    return Array.from(this.sessions.values())
+      .filter((s) => keySet.has(s.ownerKey))
+      .map((s) => {
+        const idle = Math.round((now - s.lastUsedAt.getTime()) / 1000);
+        const ttl = s.everUsed ? TTL_USED_MS : TTL_UNUSED_MS;
+        const remainingSec = Math.max(0, Math.round((ttl - (now - s.lastUsedAt.getTime())) / 1000));
+        return {
+          session_token: s.token,
+          host: s.host,
+          port: s.port,
+          username: s.username,
+          ...(s.label ? { label: s.label } : {}),
+          createdAt: s.createdAt.toISOString(),
+          lastUsedAt: s.lastUsedAt.toISOString(),
+          everUsed: s.everUsed,
+          idleSeconds: idle,
+          ttlDescription: s.everUsed
+            ? `${remainingSec}s remaining (3-month TTL)`
+            : `${remainingSec}s remaining (1-day TTL, use to extend)`,
+        };
+      });
+  }
+
   private getSessionByToken(token: string): SSHSession {
     const session = this.sessions.get(token);
     if (!session) {

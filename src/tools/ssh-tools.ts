@@ -1,45 +1,36 @@
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { z } from "zod";
 import { SSHSessionManager } from "../services/ssh-session-manager.js";
-import { KeyRole } from "../services/key-store.js";
-
-export interface CallerContext {
-  role: KeyRole;
-  key: string;
-  label: string;
-}
+import { CallerContext } from "../services/caller-context.js";
 
 export function registerSSHTools(
   server: McpServer,
   manager: SSHSessionManager,
-  caller: CallerContext
+  ctx: CallerContext
 ): void {
 
   // ─────────────────────────────────────────────
-  // ssh_connect (User Key only)
+  // ssh_connect (User Key required)
   // ─────────────────────────────────────────────
   server.registerTool(
     "ssh_connect",
     {
       title: "SSH接続",
-      description: `[USER KEY ONLY] Establish a new SSH connection. Returns a session_token (SHA-256 capability token) that can be shared with others.
+      description: `[USER KEY REQUIRED] Establish a new SSH connection. Returns a session_token (SHA-256 capability token).
+
+The session is owned by the primary User Key (first User Key in ?key= params).
+session_token can be shared — anyone with it can operate the session.
 
 Args:
-  - host (string): Hostname or IP (e.g. "192.168.70.226")
+  - host (string): Hostname or IP
   - port (number, optional): SSH port (default: 22)
   - username (string): SSH username
-  - password (string, optional): Password auth
+  - password (string, optional): Password
   - private_key (string, optional): Private key (PEM)
   - passphrase (string, optional): Key passphrase
   - label (string, optional): Human-readable label
 
-Returns:
-  JSON with session_token. Use this token for all subsequent operations.
-  The token is a SHA-256 hash — safe to share, cannot reveal SSH credentials.
-
-TTL:
-  - Unused sessions expire after 1 day
-  - Once you run ssh_execute/upload/download, TTL extends to 3 months from last use`,
+TTL: Unused → 1 day / Used → 3 months from last use`,
       inputSchema: {
         host: z.string().min(1).describe("Hostname or IP address"),
         port: z.number().int().min(1).max(65535).default(22).describe("SSH port"),
@@ -55,10 +46,10 @@ TTL:
       },
     },
     async (params) => {
-      if (caller.role !== "user") {
+      if (!ctx.hasUser || !ctx.primaryUserKey) {
         return {
           isError: true,
-          content: [{ type: "text", text: "Only User Keys can create SSH sessions. Use a User Key or create one with user_key_create." }],
+          content: [{ type: "text", text: "User Key required to create SSH sessions. Add a User Key to ?key= or create one with user_key_create via Admin Key." }],
         };
       }
       try {
@@ -70,7 +61,7 @@ TTL:
           privateKey: params.private_key,
           passphrase: params.passphrase,
           label: params.label,
-          ownerKey: caller.key,
+          ownerKey: ctx.primaryUserKey.key,
         });
         return {
           content: [{ type: "text", text: JSON.stringify({
@@ -79,6 +70,7 @@ TTL:
             port: session.port,
             username: session.username,
             label: session.label ?? null,
+            owned_by: ctx.primaryUserKey.label,
             message: `Connected. Use session_token "${session.token}" for ssh_execute etc.`,
           }, null, 2) }],
         };
@@ -96,15 +88,12 @@ TTL:
     "ssh_execute",
     {
       title: "SSHコマンド実行",
-      description: `Execute a shell command on an SSH session. Anyone with the session_token can use this.
+      description: `Execute a shell command. Anyone with the session_token can use this.
 
 Args:
   - session_token (string): Token from ssh_connect
-  - command (string): Shell command(s). Use && or ; for multiple.
-  - timeout_ms (number, optional): Timeout (default: 120000ms, max: 600000ms)
-
-Returns:
-  JSON with exit_code, stdout, stderr, duration_ms.`,
+  - command (string): Shell command(s)
+  - timeout_ms (number, optional): Timeout (default: 120000ms, max: 600000ms)`,
       inputSchema: {
         session_token: z.string().min(1).describe("Session token from ssh_connect"),
         command: z.string().min(1).max(10000).describe("Shell command"),
@@ -164,17 +153,17 @@ Args:
 
   // ─────────────────────────────────────────────
   // ssh_list_sessions
-  //   User Key → own sessions only
-  //   Admin Key → all sessions
+  //   Admin present → all sessions
+  //   User only → union of all User Keys' sessions
   // ─────────────────────────────────────────────
   server.registerTool(
     "ssh_list_sessions",
     {
       title: "SSHセッション一覧",
-      description: `List SSH sessions. User Keys see only their own sessions. Admin Keys see all sessions.
+      description: `List SSH sessions visible to the current key(s).
 
-Returns:
-  JSON array of sessions with token, host, username, TTL info.`,
+- Admin Key present: all sessions
+- User Keys only: union of sessions owned by any of the provided User Keys`,
       inputSchema: {},
       annotations: {
         readOnlyHint: true, destructiveHint: false,
@@ -182,19 +171,26 @@ Returns:
       },
     },
     async () => {
-      const isAdmin = caller.role === "admin";
-      const sessions = manager.listSessions(
-        isAdmin ? undefined : caller.key,
-        isAdmin
-      );
+      let sessions;
+      if (ctx.hasAdmin) {
+        // Admin sees everything
+        sessions = manager.listSessions(undefined, true);
+      } else {
+        // Union of all User Keys' sessions
+        sessions = manager.listSessionsByKeys(ctx.userKeyStrings);
+      }
       return {
-        content: [{ type: "text", text: JSON.stringify({ total: sessions.length, sessions }, null, 2) }],
+        content: [{ type: "text", text: JSON.stringify({
+          total: sessions.length,
+          scope: ctx.hasAdmin ? "all (admin)" : `${ctx.userKeys.length} user key(s)`,
+          sessions,
+        }, null, 2) }],
       };
     }
   );
 
   // ─────────────────────────────────────────────
-  // ssh_upload_file (capability: anyone with session_token)
+  // ssh_upload_file (capability)
   // ─────────────────────────────────────────────
   server.registerTool(
     "ssh_upload_file",
@@ -233,7 +229,7 @@ Args:
   );
 
   // ─────────────────────────────────────────────
-  // ssh_download_file (capability: anyone with session_token)
+  // ssh_download_file (capability)
   // ─────────────────────────────────────────────
   server.registerTool(
     "ssh_download_file",

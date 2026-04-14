@@ -1,12 +1,12 @@
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { z } from "zod";
 import { KeyStore } from "../services/key-store.js";
-import { CallerContext } from "./ssh-tools.js";
+import { CallerContext } from "../services/caller-context.js";
 
 export function registerAdminTools(
   server: McpServer,
   keyStore: KeyStore,
-  caller: CallerContext
+  ctx: CallerContext
 ): void {
 
   // ─────────────────────────────────────────────
@@ -16,13 +16,13 @@ export function registerAdminTools(
     "user_key_create",
     {
       title: "User Key発行",
-      description: `[ADMIN ONLY] Create a new User Key. Give this key to a user so they can connect to the MCP server via ?key=xxx.
+      description: `[ADMIN KEY REQUIRED] Create a new User Key.
 
 Args:
   - label (string): Human-readable label (e.g. "hori", "tanaka-dev")
 
 Returns:
-  JSON with the full key string. Shown only once — save it.`,
+  Full key string. Shown only once — save it.`,
       inputSchema: {
         label: z.string().min(1).max(100).describe("Label for this user key"),
       },
@@ -32,11 +32,8 @@ Returns:
       },
     },
     async (params) => {
-      if (caller.role !== "admin") {
-        return {
-          isError: true,
-          content: [{ type: "text", text: "Permission denied: Admin Key required." }],
-        };
+      if (!ctx.hasAdmin) {
+        return { isError: true, content: [{ type: "text", text: "Admin Key required." }] };
       }
       const uk = keyStore.createUserKey(params.label);
       return {
@@ -57,10 +54,7 @@ Returns:
     "user_key_list",
     {
       title: "User Key一覧",
-      description: `[ADMIN ONLY] List all User Keys.
-
-Returns:
-  JSON array of user keys with key, label, timestamps.`,
+      description: `[ADMIN KEY REQUIRED] List all User Keys.`,
       inputSchema: {},
       annotations: {
         readOnlyHint: true, destructiveHint: false,
@@ -68,18 +62,15 @@ Returns:
       },
     },
     async () => {
-      if (caller.role !== "admin") {
-        return {
-          isError: true,
-          content: [{ type: "text", text: "Permission denied: Admin Key required." }],
-        };
+      if (!ctx.hasAdmin) {
+        return { isError: true, content: [{ type: "text", text: "Admin Key required." }] };
       }
       const keys = keyStore.listUserKeys();
       return {
         content: [{ type: "text", text: JSON.stringify({
           total: keys.length,
           keys: keys.map((k) => ({
-            key: k.key.slice(0, 12) + "..." + k.key.slice(-4),
+            key_preview: k.key.slice(0, 12) + "..." + k.key.slice(-4),
             key_full: k.key,
             label: k.label,
             createdAt: k.createdAt,
@@ -97,12 +88,12 @@ Returns:
     "user_key_delete",
     {
       title: "User Key削除",
-      description: `[ADMIN ONLY] Delete a User Key. Sessions created by this key will remain active until their TTL expires.
+      description: `[ADMIN KEY REQUIRED] Delete a User Key. Active sessions remain until TTL expires.
 
 Args:
-  - key (string): The full User Key string to delete`,
+  - key (string): Full User Key string to delete`,
       inputSchema: {
-        key: z.string().min(1).describe("Full User Key string to delete"),
+        key: z.string().min(1).describe("Full User Key string"),
       },
       annotations: {
         readOnlyHint: false, destructiveHint: true,
@@ -110,22 +101,14 @@ Args:
       },
     },
     async (params) => {
-      if (caller.role !== "admin") {
-        return {
-          isError: true,
-          content: [{ type: "text", text: "Permission denied: Admin Key required." }],
-        };
+      if (!ctx.hasAdmin) {
+        return { isError: true, content: [{ type: "text", text: "Admin Key required." }] };
       }
       const deleted = keyStore.deleteUserKey(params.key);
       if (deleted) {
-        return {
-          content: [{ type: "text", text: JSON.stringify({ deleted: true, remaining: keyStore.userKeyCount }) }],
-        };
+        return { content: [{ type: "text", text: JSON.stringify({ deleted: true, remaining: keyStore.userKeyCount }) }] };
       }
-      return {
-        isError: true,
-        content: [{ type: "text", text: "User Key not found." }],
-      };
+      return { isError: true, content: [{ type: "text", text: "User Key not found." }] };
     }
   );
 
@@ -136,10 +119,7 @@ Args:
     "whoami",
     {
       title: "現在のキー情報",
-      description: `Show info about the current API key.
-
-Returns:
-  JSON with role, label.`,
+      description: `Show info about all API keys in this request.`,
       inputSchema: {},
       annotations: {
         readOnlyHint: true, destructiveHint: false,
@@ -149,8 +129,16 @@ Returns:
     async () => {
       return {
         content: [{ type: "text", text: JSON.stringify({
-          role: caller.role,
-          label: caller.label,
+          has_admin: ctx.hasAdmin,
+          has_user: ctx.hasUser,
+          primary_user_key: ctx.primaryUserKey
+            ? { label: ctx.primaryUserKey.label, key_preview: ctx.primaryUserKey.key.slice(0, 12) + "..." }
+            : null,
+          all_keys: ctx.keys.map((k) => ({
+            role: k.role,
+            label: k.label,
+            key_preview: k.key.slice(0, 12) + "...",
+          })),
         }, null, 2) }],
       };
     }

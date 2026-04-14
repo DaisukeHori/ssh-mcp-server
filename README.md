@@ -98,6 +98,33 @@ Cloudflare Tunnel (HTTPS)
 | **User Key** | MCPアクセス。SSH接続の作成権 | `uk_84e17ac6...` |
 | **Session Token** | SSH操作権。持っていれば誰でも使える | `sess_e7b2a4f1...` |
 
+### マルチキー対応
+
+`?key=` は複数指定可能。Admin Key と User Key の混在もOK。
+
+```
+?key=ak_xxx&key=uk_aaa&key=uk_bbb
+```
+
+| パターン | 例 | ssh_connect | ssh_list | admin操作 |
+|:--|:--|:--|:--|:--|
+| Admin のみ | `?key=ak_xxx` | ✗ | 全セッション | ✓ |
+| User ×1 | `?key=uk_aaa` | ✓ (uk_aaa所有) | uk_aaaのみ | ✗ |
+| User ×2 | `?key=uk_aaa&key=uk_bbb` | ✓ (uk_aaa所有) | uk_aaa ∪ uk_bbb | ✗ |
+| Admin + User ×1 | `?key=ak_xxx&key=uk_aaa` | ✓ (uk_aaa所有) | 全セッション | ✓ |
+| Admin + User ×2 | `?key=ak_xxx&key=uk_aaa&key=uk_bbb` | ✓ (uk_aaa所有) | 全セッション | ✓ |
+
+- **ssh_connect** → Primary User Key（最初のUser Key）が所有者
+- **ssh_list_sessions** → Admin Key がある場合は全セッション、なければ全User Keyのセッションの和集合
+- **ssh_execute等** → session_tokenのケイパビリティ（キーの種類に関係なく操作可能）
+- **admin操作** → Admin Keyが含まれている場合のみ実行可能
+
+**典型的な使い方:**
+- 普段使い: `?key=uk_hori`
+- 管理者が全体管理: `?key=ak_xxx`
+- 管理者が自分も作業: `?key=ak_xxx&key=uk_hori` ← 最強構成
+- 他人のセッションも見たい: `?key=uk_hori&key=uk_tanaka`
+
 ## ツール一覧（10ツール）
 
 ### SSH操作

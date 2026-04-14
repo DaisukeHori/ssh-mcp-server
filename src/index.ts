@@ -4,6 +4,7 @@ import express, { Request, Response } from "express";
 import { resolve as pathResolve } from "path";
 import { SSHSessionManager } from "./services/ssh-session-manager.js";
 import { KeyStore } from "./services/key-store.js";
+import { buildCallerContext } from "./services/caller-context.js";
 import { registerSSHTools } from "./tools/ssh-tools.js";
 import { registerAdminTools } from "./tools/admin-tools.js";
 
@@ -46,31 +47,31 @@ app.get("/health", (_req: Request, res: Response) => {
 });
 
 // ─────────────────────────────────────────────
-// MCP Endpoint — auth via ?key= URL parameter
+// MCP Endpoint — auth via ?key= URL parameter(s)
+//   Supports multiple keys: ?key=ak_xxx&key=uk_aaa&key=uk_bbb
 // ─────────────────────────────────────────────
 app.post("/mcp", async (req: Request, res: Response) => {
-  // Resolve key from URL parameter
-  const keyParam = req.query.key;
-  if (!keyParam || typeof keyParam !== "string") {
+  const keyParam = req.query.key as string | string[] | undefined;
+
+  if (!keyParam) {
     res.status(401).json({ error: "Missing ?key= parameter" });
     return;
   }
 
-  const resolved = keyStore.resolve(keyParam);
-  if (!resolved) {
-    res.status(403).json({ error: "Invalid key" });
+  const ctx = buildCallerContext(keyParam, keyStore);
+  if (!ctx) {
+    res.status(403).json({ error: "No valid keys found" });
     return;
   }
 
   try {
     const server = new McpServer({
       name: "ssh-mcp-server",
-      version: "2.0.0",
+      version: "2.1.0",
     });
 
-    // Register tools scoped to caller
-    registerSSHTools(server, sshManager, resolved);
-    registerAdminTools(server, keyStore, resolved);
+    registerSSHTools(server, sshManager, ctx);
+    registerAdminTools(server, keyStore, ctx);
 
     const transport = new StreamableHTTPServerTransport({
       sessionIdGenerator: undefined,
@@ -102,15 +103,15 @@ app.delete("/mcp", (_req: Request, res: Response) => {
 // ─────────────────────────────────────────────
 app.listen(PORT, "0.0.0.0", () => {
   console.error(`
-╔═══════════════════════════════════════════════╗
-║         SSH MCP Server v2.0.0                 ║
-║───────────────────────────────────────────────║
-║  Endpoint:   http://0.0.0.0:${PORT}/mcp?key=...   ║
-║  Health:     http://0.0.0.0:${PORT}/health         ║
-║  Admin Key:  ${ADMIN_KEY.slice(0, 8)}...${ADMIN_KEY.slice(-4)}                     ║
-║  User Keys:  ${keyStore.userKeyCount} loaded                       ║
-║  TTL:        1d (unused) / 3mo (used)         ║
-╚═══════════════════════════════════════════════╝
+╔═══════════════════════════════════════════════════╗
+║         SSH MCP Server v2.1.0                     ║
+║───────────────────────────────────────────────────║
+║  Endpoint:  http://0.0.0.0:${PORT}/mcp?key=...        ║
+║  Health:    http://0.0.0.0:${PORT}/health              ║
+║  Multi-key: ?key=ak_xxx&key=uk_aaa&key=uk_bbb    ║
+║  User Keys: ${keyStore.userKeyCount} loaded                          ║
+║  TTL:       1d (unused) / 3mo (used)              ║
+╚═══════════════════════════════════════════════════╝
   `);
 });
 
