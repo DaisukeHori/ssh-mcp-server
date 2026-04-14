@@ -1,0 +1,144 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>SSH MCP Server — Claude.aiをSSHクライアントにする</title>
+<meta name="description" content="Claude.aiからローカルネットワーク上の任意のサーバーにSSH接続。10のMCPツール + SHA-256ケイパビリティトークンで安全にリモート操作。">
+<meta name="author" content="Daisuke Hori">
+<meta property="og:title" content="SSH MCP Server — 10 Tools">
+<meta property="og:description" content="Claude.aiをSSHクライアントにする。Proxmox管理からデプロイまで、ブラウザだけで。">
+<meta property="og:url" content="https://daisukehori.github.io/ssh-mcp-server">
+<meta property="og:locale" content="ja_JP">
+<meta property="og:type" content="website">
+<link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'><rect width='32' height='32' rx='7' fill='%230F172A'/><text x='5' y='22' font-family='monospace' font-size='16' fill='%2310B981'>$_</text></svg>">
+<link rel="stylesheet" href="style.css">
+</head>
+<body>
+
+<nav class="nav"><div class="nav__inner">
+  <a href="index.html" class="nav__brand">
+    <svg width="28" height="28" viewBox="0 0 32 32"><rect width="32" height="32" rx="7" fill="#0F172A"/><text x="5" y="22" font-family="monospace" font-size="16" fill="#10B981">$_</text></svg>
+    SSH MCP
+  </a>
+  <ul class="nav__links">
+    <li><a href="index.html" class="active">価値</a></li>
+    <li><a href="how-it-works.html">仕組み</a></li>
+    <li><a href="getting-started.html">始め方</a></li>
+    <li><a href="https://github.com/DaisukeHori/ssh-mcp-server" target="_blank">GitHub</a></li>
+  </ul>
+  <span class="badge"><span class="badge__dot"></span> 10 Tools</span>
+</div></nav>
+
+<section class="hero">
+  <div class="hero__inner fade" id="hero-fade">
+    <div class="hero__tag"><span class="hero__tag-icon">⚡</span>10 MCP Tools + SHA-256 Session Tokens</div>
+    <h1>Claude.aiを<br><span>SSH</span>クライアントにする</h1>
+    <p class="hero__sub">ブラウザのClaude.aiからローカルサーバーにSSH接続。Proxmox管理、デプロイ、ログ確認 — どこからでも。</p>
+    <div class="hero__endpoint">
+      <span style="color:var(--ssh-text-light);font-size:12px">ENDPOINT</span>
+      <span>https://ssh-mcp.appserver.tokyo/mcp?key=YOUR_KEY</span>
+    </div>
+  </div>
+</section>
+
+<div class="divider"></div>
+
+<section class="section">
+  <div class="section__label">⚡ THE PROBLEM</div>
+  <h2 class="section__title">なぜこれが必要か</h2>
+  <p class="section__desc">Claude.aiは強力ですが、あなたのローカルサーバーにはアクセスできません。</p>
+  <div class="grid">
+    <div class="card" style="border-top:3px solid var(--ssh-border)">
+      <span class="card__badge card__badge--dark">❌ 今まで</span>
+      <h4>「出先でサーバー触れない」</h4>
+      <p>Claude Desktop / Claude Code は手元のPCが必要。スマホやブラウザだけの状況では、Proxmoxの管理もデプロイもできない。</p>
+    </div>
+    <div class="card" style="border-top:3px solid var(--ssh-green)">
+      <span class="card__badge card__badge--green">✅ SSH MCP</span>
+      <h4>「ブラウザだけで全部できる」</h4>
+      <p>Claude.aiに「Proxmoxに繋いで」と言うだけ。SSH接続、コマンド実行、ファイル操作 — セッションは3ヶ月維持。</p>
+    </div>
+  </div>
+</section>
+
+<div class="divider"></div>
+
+<section class="section">
+  <div class="section__label">💬 EXAMPLE</div>
+  <h2 class="section__title">使用例：LXC管理</h2>
+  <div class="chat">
+    <div class="chat__msg">
+      <div class="chat__role chat__role--user">👤 あなた</div>
+      <div class="chat__bubble--user">Proxmoxに繋いで。LXCの状態を確認して</div>
+    </div>
+    <div class="chat__msg">
+      <div class="chat__role chat__role--ai">🤖 AI</div>
+      <div class="chat__bubble--ai">SSH接続しました (sess_a3f8b2c1...)<br><br><code>pct list</code> の結果:<br>VMID &nbsp;Status &nbsp;&nbsp;Name<br>100 &nbsp;&nbsp;running &nbsp;web-app<br>101 &nbsp;&nbsp;stopped &nbsp;dev-env<br>400 &nbsp;&nbsp;running &nbsp;ssh-mcp</div>
+    </div>
+    <div class="chat__msg">
+      <div class="chat__role chat__role--user">👤 あなた</div>
+      <div class="chat__bubble--user">101を起動して、npm run buildして</div>
+    </div>
+    <div class="chat__msg">
+      <div class="chat__role chat__role--ai">🤖 AI</div>
+      <div class="chat__bubble--ai">✅ pct start 101 → OK<br>✅ cd /opt/app && npm run build<br>&nbsp;&nbsp;&nbsp;Build completed successfully (12.3s)</div>
+    </div>
+  </div>
+</section>
+
+<div class="divider"></div>
+
+<section class="section">
+  <div class="section__label">🔢 NUMBERS</div>
+  <h2 class="section__title">スペック</h2>
+  <div class="specs">
+    <div class="spec"><div class="spec__value">10</div><div class="spec__label">MCPツール</div></div>
+    <div class="spec"><div class="spec__value">SHA-256</div><div class="spec__label">セッショントークン</div></div>
+    <div class="spec"><div class="spec__value">3ヶ月</div><div class="spec__label">セッションTTL (使用済)</div></div>
+    <div class="spec"><div class="spec__value">3層</div><div class="spec__label">認証モデル</div></div>
+  </div>
+</section>
+
+<div class="divider"></div>
+
+<section class="section">
+  <div class="section__label">🛠️ TOOLS</div>
+  <h2 class="section__title">ツール一覧（10ツール）</h2>
+  <table class="tool-table">
+    <thead><tr><th>ツール</th><th>Admin</th><th>User</th><th>説明</th></tr></thead>
+    <tbody>
+      <tr><td><code>ssh_connect</code></td><td>✗</td><td>✓</td><td>SSH接続 → session_token返却</td></tr>
+      <tr><td><code>ssh_execute</code></td><td>✓</td><td>✓</td><td>シェルコマンド実行</td></tr>
+      <tr><td><code>ssh_disconnect</code></td><td>✓</td><td>✓</td><td>セッション切断</td></tr>
+      <tr><td><code>ssh_list_sessions</code></td><td>✓全部</td><td>✓自分</td><td>セッション一覧</td></tr>
+      <tr><td><code>ssh_upload_file</code></td><td>✓</td><td>✓</td><td>SFTPファイル送信</td></tr>
+      <tr><td><code>ssh_download_file</code></td><td>✓</td><td>✓</td><td>SFTPファイル取得</td></tr>
+      <tr><td><code>user_key_create</code></td><td>✓</td><td>✗</td><td>User Key発行</td></tr>
+      <tr><td><code>user_key_list</code></td><td>✓</td><td>✗</td><td>User Key一覧</td></tr>
+      <tr><td><code>user_key_delete</code></td><td>✓</td><td>✗</td><td>User Key削除</td></tr>
+      <tr><td><code>whoami</code></td><td>✓</td><td>✓</td><td>現在のキー情報</td></tr>
+    </tbody>
+  </table>
+</section>
+
+<div class="divider"></div>
+
+<section class="section" style="text-align:center">
+  <div class="cta">
+    <h3>始めてみよう</h3>
+    <p>仕組みを知る、またはすぐにデプロイする。</p>
+    <div style="display:flex;gap:12px;justify-content:center;flex-wrap:wrap">
+      <a href="how-it-works.html" class="btn btn--primary" style="font-size:15px;padding:12px 28px">🔍 仕組みを見る</a>
+      <a href="getting-started.html" class="btn" style="font-size:15px;padding:12px 28px;background:rgba(255,255,255,0.1);color:white;border:1px solid rgba(255,255,255,0.2)">🚀 始め方へ</a>
+    </div>
+  </div>
+</section>
+
+<footer class="footer"><a href="https://github.com/DaisukeHori/ssh-mcp-server" target="_blank">GitHub</a> · <a href="https://revol.co.jp" target="_blank">Revol Co., Ltd.</a> · MIT License</footer>
+
+<script>
+requestAnimationFrame(()=>document.getElementById("hero-fade").classList.add("fade--in"));
+</script>
+</body>
+</html>

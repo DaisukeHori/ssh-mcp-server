@@ -1,0 +1,159 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>仕組み — SSH MCP Server</title>
+<meta name="description" content="SSH MCP Serverのアーキテクチャ、3層認証モデル、セッション管理の仕組み。">
+<link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'><rect width='32' height='32' rx='7' fill='%230F172A'/><text x='5' y='22' font-family='monospace' font-size='16' fill='%2310B981'>$_</text></svg>">
+<link rel="stylesheet" href="style.css">
+</head>
+<body>
+
+<nav class="nav"><div class="nav__inner">
+  <a href="index.html" class="nav__brand">
+    <svg width="28" height="28" viewBox="0 0 32 32"><rect width="32" height="32" rx="7" fill="#0F172A"/><text x="5" y="22" font-family="monospace" font-size="16" fill="#10B981">$_</text></svg>
+    SSH MCP
+  </a>
+  <ul class="nav__links">
+    <li><a href="index.html">価値</a></li>
+    <li><a href="how-it-works.html" class="active">仕組み</a></li>
+    <li><a href="getting-started.html">始め方</a></li>
+    <li><a href="https://github.com/DaisukeHori/ssh-mcp-server" target="_blank">GitHub</a></li>
+  </ul>
+  <span class="badge"><span class="badge__dot"></span> 10 Tools</span>
+</div></nav>
+
+<section class="section" style="padding-top:48px">
+  <div class="section__label">🏗️ ARCHITECTURE</div>
+  <h2 class="section__title">全体アーキテクチャ</h2>
+  <p class="section__desc">Claude.ai → Cloudflare Tunnel → LXC上のMCPサーバー → 任意のSSHホスト。</p>
+  <div class="terminal">
+<span class="comment"># リクエストの流れ</span>
+
+Claude.ai (ブラウザ / モバイル)
+    │
+    │  POST /mcp?key=uk_xxx
+    │  HTTPS (Anthropic Cloud → Cloudflare Tunnel)
+    ▼
+┌──────────────────────────────────────┐
+│  LXC: ssh-mcp-server (port 3000)    │
+│                                      │
+│  Express + Streamable HTTP MCP       │
+│  ?key= → KeyStore → CallerContext    │
+│                                      │
+│  SSH Session Manager (in-memory)     │
+│  session_token = SHA-256 capability  │
+└──────────────────┬───────────────────┘
+                   │ SSH (port 22)
+                   ▼
+         Proxmox / LXC / VM / NAS
+</div>
+</section>
+
+<div class="divider"></div>
+
+<section class="section">
+  <div class="section__label">🔑 AUTHENTICATION</div>
+  <h2 class="section__title">3層認証モデル</h2>
+  <p class="section__desc">門番（API Key） → 接続権（User Key） → 操作権（Session Token）</p>
+  <div class="grid">
+    <div class="card" style="border-top:3px solid #EF4444">
+      <span class="card__badge" style="background:#FEF2F2;color:#DC2626">LAYER 1</span>
+      <h4>Admin Key</h4>
+      <p>環境変数で設定。サーバー管理専用。User Keyの発行/一覧/削除、全セッションの閲覧と操作が可能。SSHの新規接続は不可（権限分離）。</p>
+      <div style="margin-top:12px;padding:8px 12px;background:var(--ssh-bg);border-radius:6px;font-size:13px">
+        <code>?key=ak_a8f3b2c1...</code>
+      </div>
+    </div>
+    <div class="card" style="border-top:3px solid var(--ssh-green)">
+      <span class="card__badge card__badge--green">LAYER 2</span>
+      <h4>User Key</h4>
+      <p>Admin KeyでMCP経由発行。Claude.aiのカスタムコネクターURLに入れて使う。SSH接続の作成権を持つ。自分のセッションのみ一覧可能。</p>
+      <div style="margin-top:12px;padding:8px 12px;background:var(--ssh-bg);border-radius:6px;font-size:13px">
+        <code>?key=uk_84e17ac6...</code>
+      </div>
+    </div>
+    <div class="card" style="border-top:3px solid var(--ssh-cyan)">
+      <span class="card__badge card__badge--cyan">LAYER 3</span>
+      <h4>Session Token</h4>
+      <p>ssh_connectの戻り値。SHA-256ハッシュで、<strong>持っていれば誰でも操作可能</strong>（ケイパビリティトークン）。会話履歴に自然に残るので次のメッセージで継続利用。</p>
+      <div style="margin-top:12px;padding:8px 12px;background:var(--ssh-bg);border-radius:6px;font-size:13px">
+        <code>sess_e7b2a4f1c3d8...</code>
+      </div>
+    </div>
+  </div>
+</section>
+
+<div class="divider"></div>
+
+<section class="section">
+  <div class="section__label">⏱️ SESSION LIFECYCLE</div>
+  <h2 class="section__title">セッションのライフサイクル</h2>
+
+  <div class="terminal">
+<span class="prompt">$</span> ssh_connect(host, user, pass)
+<span class="output">→ session_token: sess_a3f8b2c1e7d4...</span>
+<span class="output">→ state: CREATED (TTL: 1日)</span>
+
+<span class="prompt">$</span> ssh_execute(sess_..., "uptime")
+<span class="output">→ state: USED (TTL: 3ヶ月 from last use)</span>
+
+<span class="comment"># 3ヶ月後...</span>
+<span class="output">→ state: EXPIRED (auto-disconnected)</span>
+
+<span class="comment"># または明示的に:</span>
+<span class="prompt">$</span> ssh_disconnect(sess_...)
+<span class="output">→ state: DISCONNECTED</span>
+</div>
+
+  <div class="grid" style="margin-top:24px">
+    <div class="card">
+      <h4>🆕 未使用セッション</h4>
+      <p>ssh_connect後、ssh_execute/upload/downloadを<strong>一度も実行していない</strong>状態。最終使用から<strong>1日</strong>で自動切断。放置防止。</p>
+    </div>
+    <div class="card">
+      <h4>✅ 使用済セッション</h4>
+      <p>ssh_execute/upload/downloadを<strong>1回以上実行</strong>した状態。最終使用から<strong>3ヶ月</strong>で自動切断。長期利用を想定。</p>
+    </div>
+  </div>
+</section>
+
+<div class="divider"></div>
+
+<section class="section">
+  <div class="section__label">🔒 SECURITY</div>
+  <h2 class="section__title">セキュリティ設計</h2>
+  <div class="grid">
+    <div class="card">
+      <h4>🔐 通信の暗号化</h4>
+      <p>Cloudflare Tunnel経由のHTTPS。Claude.ai → Anthropic Cloud → Cloudflare → LXC 全経路がTLS暗号化。直接ポート公開なし。</p>
+    </div>
+    <div class="card">
+      <h4>🗑️ SSH認証情報の非保存</h4>
+      <p>パスワード/秘密鍵はMCPリクエスト内でのみ使用。サーバーに保存もログ出力もしない。再起動で全セッション消去。</p>
+    </div>
+    <div class="card">
+      <h4>🔗 ケイパビリティトークン</h4>
+      <p>session_tokenはSHA-256ハッシュ。SSH接続情報を逆算不可能。256bitでブルートフォース不可能。</p>
+    </div>
+    <div class="card">
+      <h4>📂 ソースコード公開</h4>
+      <p>全コードがGitHubで公開。認証・セッション管理の実装を誰でも監査可能。</p>
+    </div>
+  </div>
+</section>
+
+<div class="divider"></div>
+
+<section class="section" style="text-align:center">
+  <div class="cta">
+    <h3>セットアップは4ステップ</h3>
+    <p>LXCデプロイ → Cloudflare Tunnel → コネクター登録 → 完了。</p>
+    <a href="getting-started.html" class="btn btn--primary" style="font-size:15px;padding:12px 28px">🚀 始め方へ</a>
+  </div>
+</section>
+
+<footer class="footer"><a href="https://github.com/DaisukeHori/ssh-mcp-server" target="_blank">GitHub</a> · <a href="https://revol.co.jp" target="_blank">Revol Co., Ltd.</a> · MIT License</footer>
+</body>
+</html>

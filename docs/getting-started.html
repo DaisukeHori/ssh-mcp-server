@@ -1,0 +1,226 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>始め方 — SSH MCP Server</title>
+<meta name="description" content="SSH MCP Serverのセットアップガイド。LXCデプロイからClaude.aiコネクター登録まで。">
+<link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'><rect width='32' height='32' rx='7' fill='%230F172A'/><text x='5' y='22' font-family='monospace' font-size='16' fill='%2310B981'>$_</text></svg>">
+<link rel="stylesheet" href="style.css">
+</head>
+<body>
+
+<nav class="nav"><div class="nav__inner">
+  <a href="index.html" class="nav__brand">
+    <svg width="28" height="28" viewBox="0 0 32 32"><rect width="32" height="32" rx="7" fill="#0F172A"/><text x="5" y="22" font-family="monospace" font-size="16" fill="#10B981">$_</text></svg>
+    SSH MCP
+  </a>
+  <ul class="nav__links">
+    <li><a href="index.html">価値</a></li>
+    <li><a href="how-it-works.html">仕組み</a></li>
+    <li><a href="getting-started.html" class="active">始め方</a></li>
+    <li><a href="https://github.com/DaisukeHori/ssh-mcp-server" target="_blank">GitHub</a></li>
+  </ul>
+  <span class="badge"><span class="badge__dot"></span> 10 Tools</span>
+</div></nav>
+
+<section class="section" style="padding-top:48px">
+  <div class="section__label">🚀 GETTING STARTED</div>
+  <h2 class="section__title">4ステップで始める</h2>
+  <p class="section__desc">所要時間：約15分。必要なもの：Proxmox (またはLinuxサーバー)、Cloudflare Tunnel、Claude.aiアカウント。</p>
+</section>
+
+<div class="divider"></div>
+
+<section class="section">
+  <h2 class="section__title">ステップ1: LXCにデプロイ</h2>
+  <p class="section__desc">ProxmoxのLXCコンテナ（または任意のLinux環境）にインストールします。</p>
+
+  <div class="terminal">
+<span class="comment"># LXC内で実行</span>
+<span class="prompt">$</span> apt update && apt install -y curl git
+<span class="prompt">$</span> curl -fsSL https://deb.nodesource.com/setup_22.x | bash -
+<span class="prompt">$</span> apt install -y nodejs
+
+<span class="prompt">$</span> git clone https://github.com/DaisukeHori/ssh-mcp-server.git /opt/ssh-mcp-server
+<span class="prompt">$</span> cd /opt/ssh-mcp-server
+<span class="prompt">$</span> npm install && npx tsc
+</div>
+
+  <div style="background:#FEF3C7;border-left:3px solid #F59E0B;border-radius:4px;padding:10px 14px;font-size:13px;color:#92400E;margin:16px 0">
+    ⚠️ Node.js 22以上が必要です。<code>node --version</code> で確認してください。
+  </div>
+</section>
+
+<div class="divider"></div>
+
+<section class="section">
+  <h2 class="section__title">ステップ2: Admin Keyを生成して起動</h2>
+
+  <div class="terminal">
+<span class="comment"># Admin Key生成</span>
+<span class="prompt">$</span> export ADMIN_KEY=$(openssl rand -hex 32)
+<span class="prompt">$</span> echo "Admin Key: $ADMIN_KEY"
+<span class="output">Admin Key: a8f3b2c1d9e4f7a6...</span>
+<span class="comment"># ⚠️ このキーを必ず保存してください！</span>
+
+<span class="comment"># テスト起動</span>
+<span class="prompt">$</span> node dist/index.js
+
+<span class="output">╔═══════════════════════════════════════════════╗</span>
+<span class="output">║         SSH MCP Server v2.0.0                 ║</span>
+<span class="output">║  Endpoint: http://0.0.0.0:3000/mcp?key=...   ║</span>
+<span class="output">║  Auth:     Multi-key (URL param)              ║</span>
+<span class="output">╚═══════════════════════════════════════════════╝</span>
+</div>
+
+  <p style="margin-top:16px;font-size:14px;color:var(--ssh-text-light)">systemdサービスとして登録する場合：</p>
+
+  <div class="terminal">
+<span class="prompt">$</span> cat > /etc/systemd/system/ssh-mcp-server.service << EOF
+[Unit]
+Description=SSH MCP Server
+After=network.target
+
+[Service]
+Type=simple
+WorkingDirectory=/opt/ssh-mcp-server
+Environment=ADMIN_KEY=YOUR_ADMIN_KEY_HERE
+Environment=PORT=3000
+ExecStart=/usr/bin/node dist/index.js
+Restart=always
+RestartSec=5
+
+[Install]
+WantedBy=multi-user.target
+EOF
+
+<span class="prompt">$</span> systemctl enable --now ssh-mcp-server
+<span class="prompt">$</span> journalctl -u ssh-mcp-server -f  <span class="comment"># ログ確認</span>
+</div>
+</section>
+
+<div class="divider"></div>
+
+<section class="section">
+  <h2 class="section__title">ステップ3: Cloudflare Tunnel設定</h2>
+  <p class="section__desc">LXCをインターネットに公開せず、Cloudflare Tunnel経由でHTTPS公開します。</p>
+
+  <div class="terminal">
+<span class="comment"># cloudflaredのconfig.yml</span>
+ingress:
+  - hostname: ssh-mcp.appserver.tokyo
+    service: http://localhost:3000
+  - service: http_status:404
+</div>
+
+  <div style="background:var(--ssh-green-light);border-left:3px solid var(--ssh-green);border-radius:4px;padding:10px 14px;font-size:13px;color:#065F46;margin:16px 0">
+    ✅ Cloudflare TunnelによりLXCのポートを直接公開する必要がありません。全通信がHTTPS暗号化されます。
+  </div>
+</section>
+
+<div class="divider"></div>
+
+<section class="section">
+  <h2 class="section__title">ステップ4: Claude.aiでコネクター登録</h2>
+
+  <div class="grid">
+    <div class="card" style="border-top:3px solid #EF4444">
+      <h4>① Admin接続</h4>
+      <p>まずAdmin Keyで接続し、User Keyを発行します。</p>
+      <div style="margin-top:12px">
+        <p style="font-size:13px;font-weight:600;margin-bottom:4px">Claude.ai → Settings → Connectors → Add</p>
+        <div class="terminal" style="margin:0;font-size:12px;padding:12px">https://ssh-mcp.appserver.tokyo/mcp?key=YOUR_ADMIN_KEY</div>
+      </div>
+      <div style="margin-top:12px;font-size:13px;color:var(--ssh-text-light)">
+        接続後、チャットで：<br>
+        <code>「horiというユーザーキーを作って」</code>
+      </div>
+    </div>
+    <div class="card" style="border-top:3px solid var(--ssh-green)">
+      <h4>② User接続（普段使い）</h4>
+      <p>発行されたUser Keyで別のコネクターを登録します。</p>
+      <div style="margin-top:12px">
+        <p style="font-size:13px;font-weight:600;margin-bottom:4px">Claude.ai → Settings → Connectors → Add</p>
+        <div class="terminal" style="margin:0;font-size:12px;padding:12px">https://ssh-mcp.appserver.tokyo/mcp?key=uk_84e17ac6...</div>
+      </div>
+      <div style="margin-top:12px;font-size:13px;color:var(--ssh-text-light)">
+        接続後、チャットで：<br>
+        <code>「Proxmoxに繋いで」</code>
+      </div>
+    </div>
+  </div>
+</section>
+
+<div class="divider"></div>
+
+<section class="section">
+  <div class="section__label">🖥️ OTHER CLIENTS</div>
+  <h2 class="section__title">Claude Desktop / Claude Code での使用</h2>
+
+  <p style="font-size:14px;font-weight:600;margin-bottom:8px">Claude Desktop / Cursor / VS Code:</p>
+  <div class="terminal">
+{
+  "mcpServers": {
+    "ssh": {
+      "command": "npx",
+      "args": ["-y", "mcp-remote",
+        "https://ssh-mcp.appserver.tokyo/mcp?key=YOUR_KEY"]
+    }
+  }
+}
+</div>
+
+  <p style="font-size:14px;font-weight:600;margin:16px 0 8px">Claude Code:</p>
+  <div class="terminal">
+<span class="prompt">$</span> claude mcp add --transport http ssh-mcp \
+    "https://ssh-mcp.appserver.tokyo/mcp?key=YOUR_KEY"
+</div>
+</section>
+
+<div class="divider"></div>
+
+<section class="section">
+  <div class="section__label">❓ FAQ</div>
+  <h2 class="section__title">よくある質問</h2>
+  <div class="grid">
+    <div class="card">
+      <h4>session_tokenを忘れた</h4>
+      <p><code>ssh_list_sessions</code> で自分のセッション一覧を確認できます。</p>
+    </div>
+    <div class="card">
+      <h4>セッションが切れた</h4>
+      <p>3ヶ月使わないと自動切断されます。<code>ssh_connect</code> で再接続してください。</p>
+    </div>
+    <div class="card">
+      <h4>複数サーバーに同時接続</h4>
+      <p><code>ssh_connect</code> を複数回呼べば、それぞれ別の session_token で操作できます。</p>
+    </div>
+    <div class="card">
+      <h4>session_tokenは共有できる？</h4>
+      <p>はい。SHA-256のケイパビリティトークンなので、持っていれば誰でも操作可能です。</p>
+    </div>
+    <div class="card">
+      <h4>サーバーが再起動したら？</h4>
+      <p>全SSH接続が切断されます。session_tokenは無効化。User Keysは永続化されているので再接続可能です。</p>
+    </div>
+    <div class="card">
+      <h4>Admin Keyを変更したい</h4>
+      <p>環境変数 <code>ADMIN_KEY</code> を変更してサーバー再起動。User Keysとセッションには影響しません。</p>
+    </div>
+  </div>
+</section>
+
+<div class="divider"></div>
+
+<section class="section" style="text-align:center">
+  <div class="cta">
+    <h3>準備完了？</h3>
+    <p>ソースコードはGitHubで公開中。</p>
+    <a href="https://github.com/DaisukeHori/ssh-mcp-server" target="_blank" class="btn btn--primary" style="font-size:15px;padding:12px 28px">📦 GitHub で見る</a>
+  </div>
+</section>
+
+<footer class="footer"><a href="https://github.com/DaisukeHori/ssh-mcp-server" target="_blank">GitHub</a> · <a href="https://revol.co.jp" target="_blank">Revol Co., Ltd.</a> · MIT License</footer>
+</body>
+</html>
