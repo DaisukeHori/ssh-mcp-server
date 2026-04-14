@@ -148,7 +148,7 @@ export class SSHSessionManager {
     timeoutMs: number = DEFAULT_EXEC_TIMEOUT_MS
   ): Promise<ExecResult> {
     const session = this.getSessionByToken(token);
-    this.markUsed(session);
+    this.markSessionUsed(session);
 
     return new Promise<ExecResult>((resolve, reject) => {
       const startTime = Date.now();
@@ -209,7 +209,7 @@ export class SSHSessionManager {
 
   async uploadFile(token: string, content: string, remotePath: string): Promise<void> {
     const session = this.getSessionByToken(token);
-    this.markUsed(session);
+    this.markSessionUsed(session);
 
     return new Promise<void>((resolve, reject) => {
       session.client.sftp((err, sftp) => {
@@ -224,7 +224,7 @@ export class SSHSessionManager {
 
   async downloadFile(token: string, remotePath: string): Promise<string> {
     const session = this.getSessionByToken(token);
-    this.markUsed(session);
+    this.markSessionUsed(session);
 
     return new Promise<string>((resolve, reject) => {
       session.client.sftp((err, sftp) => {
@@ -360,7 +360,7 @@ export class SSHSessionManager {
       });
   }
 
-  private getSessionByToken(token: string): SSHSession {
+  getSessionByToken(token: string): SSHSession {
     const session = this.sessions.get(token);
     if (!session) {
       throw new Error(
@@ -370,7 +370,7 @@ export class SSHSessionManager {
     return session;
   }
 
-  private markUsed(session: SSHSession): void {
+  markSessionUsed(session: SSHSession): void {
     session.lastUsedAt = new Date();
     session.everUsed = true;
   }

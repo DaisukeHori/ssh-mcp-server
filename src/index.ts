@@ -4,13 +4,11 @@ import express, { Request, Response } from "express";
 import { resolve as pathResolve } from "path";
 import { SSHSessionManager } from "./services/ssh-session-manager.js";
 import { KeyStore } from "./services/key-store.js";
+import { CommandRunner } from "./services/command-runner.js";
 import { buildCallerContext } from "./services/caller-context.js";
 import { registerSSHTools } from "./tools/ssh-tools.js";
 import { registerAdminTools } from "./tools/admin-tools.js";
 
-// ─────────────────────────────────────────────
-// Configuration
-// ─────────────────────────────────────────────
 const PORT = parseInt(process.env.PORT || "3000", 10);
 const ADMIN_KEY = process.env.ADMIN_KEY || "";
 const DATA_DIR = process.env.DATA_DIR || process.cwd();
@@ -18,25 +16,17 @@ const USER_KEYS_FILE = pathResolve(DATA_DIR, "user-keys.json");
 
 if (!ADMIN_KEY) {
   console.error("ERROR: ADMIN_KEY environment variable is required.");
-  console.error("  export ADMIN_KEY=$(openssl rand -hex 32)");
   process.exit(1);
 }
 
-// ─────────────────────────────────────────────
 // Singletons
-// ─────────────────────────────────────────────
 const sshManager = new SSHSessionManager();
 const keyStore = new KeyStore(USER_KEYS_FILE, ADMIN_KEY);
+const cmdRunner = new CommandRunner();
 
-// ─────────────────────────────────────────────
-// Express
-// ─────────────────────────────────────────────
 const app = express();
 app.use(express.json());
 
-// ─────────────────────────────────────────────
-// Health (no auth)
-// ─────────────────────────────────────────────
 app.get("/health", (_req: Request, res: Response) => {
   res.json({
     status: "ok",
@@ -46,77 +36,45 @@ app.get("/health", (_req: Request, res: Response) => {
   });
 });
 
-// ─────────────────────────────────────────────
-// MCP Endpoint — auth via ?key= URL parameter(s)
-//   Supports multiple keys: ?key=ak_xxx&key=uk_aaa&key=uk_bbb
-// ─────────────────────────────────────────────
 app.post("/mcp", async (req: Request, res: Response) => {
   const keyParam = req.query.key as string | string[] | undefined;
-
-  if (!keyParam) {
-    res.status(401).json({ error: "Missing ?key= parameter" });
-    return;
-  }
+  if (!keyParam) { res.status(401).json({ error: "Missing ?key= parameter" }); return; }
 
   const ctx = buildCallerContext(keyParam, keyStore);
-  if (!ctx) {
-    res.status(403).json({ error: "No valid keys found" });
-    return;
-  }
+  if (!ctx) { res.status(403).json({ error: "No valid keys found" }); return; }
 
   try {
-    const server = new McpServer({
-      name: "ssh-mcp-server",
-      version: "2.1.0",
-    });
-
-    registerSSHTools(server, sshManager, ctx);
+    const server = new McpServer({ name: "ssh-mcp-server", version: "2.1.0" });
+    registerSSHTools(server, sshManager, cmdRunner, ctx);
     registerAdminTools(server, keyStore, ctx);
 
     const transport = new StreamableHTTPServerTransport({
-      sessionIdGenerator: undefined,
-      enableJsonResponse: true,
+      sessionIdGenerator: undefined, enableJsonResponse: true,
     });
-
     res.on("close", () => transport.close());
-
     await server.connect(transport);
     await transport.handleRequest(req, res, req.body);
   } catch (error) {
     console.error("[MCP] Error:", error);
-    if (!res.headersSent) {
-      res.status(500).json({ error: "Internal server error" });
-    }
+    if (!res.headersSent) res.status(500).json({ error: "Internal server error" });
   }
 });
 
-app.get("/mcp", (_req: Request, res: Response) => {
-  res.status(405).json({ error: "Use POST" });
-});
+app.get("/mcp", (_req, res) => res.status(405).json({ error: "Use POST" }));
+app.delete("/mcp", (_req, res) => res.status(405).json({ error: "Use POST" }));
 
-app.delete("/mcp", (_req: Request, res: Response) => {
-  res.status(405).json({ error: "Use POST" });
-});
-
-// ─────────────────────────────────────────────
-// Start
-// ─────────────────────────────────────────────
 app.listen(PORT, "0.0.0.0", () => {
   console.error(`
 ╔═══════════════════════════════════════════════════╗
 ║         SSH MCP Server v2.1.0                     ║
 ║───────────────────────────────────────────────────║
 ║  Endpoint:  http://0.0.0.0:${PORT}/mcp?key=...        ║
-║  Health:    http://0.0.0.0:${PORT}/health              ║
-║  Multi-key: ?key=ak_xxx&key=uk_aaa&key=uk_bbb    ║
-║  User Keys: ${keyStore.userKeyCount} loaded                          ║
+║  Multi-key: ?key=ak&key=uk_a&key=uk_b             ║
+║  Async:     ssh_execute + ssh_command_status       ║
 ║  TTL:       1d (unused) / 3mo (used)              ║
 ╚═══════════════════════════════════════════════════╝
   `);
 });
 
-// ─────────────────────────────────────────────
-// Graceful Shutdown
-// ─────────────────────────────────────────────
-process.on("SIGTERM", () => { sshManager.destroy(); process.exit(0); });
-process.on("SIGINT", () => { sshManager.destroy(); process.exit(0); });
+process.on("SIGTERM", () => { cmdRunner.destroy(); sshManager.destroy(); process.exit(0); });
+process.on("SIGINT", () => { cmdRunner.destroy(); sshManager.destroy(); process.exit(0); });
