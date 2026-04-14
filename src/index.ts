@@ -14,6 +14,7 @@ import { registerAdminTools } from "./tools/admin-tools.js";
 const PORT = parseInt(process.env.PORT || "3000", 10);
 const ADMIN_KEY = process.env.ADMIN_KEY || "";
 const WEBHOOK_SECRET = process.env.WEBHOOK_SECRET || "";
+const BLOCKED_HOSTS = (process.env.BLOCKED_HOSTS || "").split(",").filter(Boolean);
 const DATA_DIR = process.env.DATA_DIR || process.cwd();
 const USER_KEYS_FILE = pathResolve(DATA_DIR, "user-keys.json");
 
@@ -23,7 +24,7 @@ if (!ADMIN_KEY) {
 }
 
 // Singletons
-const sshManager = new SSHSessionManager();
+const sshManager = new SSHSessionManager(BLOCKED_HOSTS);
 const keyStore = new KeyStore(USER_KEYS_FILE, ADMIN_KEY);
 const cmdRunner = new CommandRunner();
 

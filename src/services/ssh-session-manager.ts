@@ -48,9 +48,17 @@ function generateSessionToken(): string {
 export class SSHSessionManager {
   private sessions: Map<string, SSHSession> = new Map(); // keyed by token
   private cleanupTimer: NodeJS.Timeout | null = null;
+  private blockedHosts: Set<string>;
 
-  constructor() {
+  constructor(blockedHosts: string[] = []) {
+    this.blockedHosts = new Set([
+      "127.0.0.1", "localhost", "::1", "0.0.0.0",
+      ...blockedHosts.map((h) => h.toLowerCase().trim()).filter(Boolean),
+    ]);
     this.startCleanup();
+    if (blockedHosts.length > 0) {
+      console.error(`[SSHSessionManager] Blocked hosts: ${[...this.blockedHosts].join(", ")}`);
+    }
   }
 
   private startCleanup(): void {
@@ -75,6 +83,11 @@ export class SSHSessionManager {
   // ─── Connect ────────────────────────────────
 
   async connect(options: ConnectOptions): Promise<SSHSession> {
+    // Block connections to self
+    if (this.blockedHosts.has(options.host.toLowerCase().trim())) {
+      throw new Error(`Connection to ${options.host} is blocked. This host is in the blocked list.`);
+    }
+
     const token = generateSessionToken();
     const client = new Client();
 
