@@ -4,9 +4,9 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width,initial-scale=1">
 <title>SSH MCP Server — Claude.aiをSSHクライアントにする</title>
-<meta name="description" content="Claude.aiからローカルネットワーク上の任意のサーバーにSSH接続。10のMCPツール + SHA-256ケイパビリティトークンで安全にリモート操作。">
+<meta name="description" content="Claude.aiからローカルネットワーク上の任意のサーバーにSSH接続。10のMCPツール + SHA-256ケイパビリティトークン + マルチキー認証で安全にリモート操作。">
 <meta name="author" content="Daisuke Hori">
-<meta property="og:title" content="SSH MCP Server — 10 Tools">
+<meta property="og:title" content="SSH MCP Server — 10 Tools + Multi-Key Auth">
 <meta property="og:description" content="Claude.aiをSSHクライアントにする。Proxmox管理からデプロイまで、ブラウザだけで。">
 <meta property="og:url" content="https://daisukehori.github.io/ssh-mcp-server">
 <meta property="og:locale" content="ja_JP">
@@ -27,17 +27,46 @@
     <li><a href="getting-started.html">始め方</a></li>
     <li><a href="https://github.com/DaisukeHori/ssh-mcp-server" target="_blank">GitHub</a></li>
   </ul>
-  <span class="badge"><span class="badge__dot"></span> 10 Tools</span>
+  <span class="badge"><span class="badge__dot"></span> v2.1</span>
 </div></nav>
 
 <section class="hero">
   <div class="hero__inner fade" id="hero-fade">
-    <div class="hero__tag"><span class="hero__tag-icon">⚡</span>10 MCP Tools + SHA-256 Session Tokens</div>
+    <div class="hero__tag"><span class="hero__tag-icon">⚡</span>10 Tools + SHA-256 Tokens + Multi-Key Auth</div>
     <h1>Claude.aiを<br><span>SSH</span>クライアントにする</h1>
     <p class="hero__sub">ブラウザのClaude.aiからローカルサーバーにSSH接続。Proxmox管理、デプロイ、ログ確認 — どこからでも。</p>
     <div class="hero__endpoint">
       <span style="color:var(--ssh-text-light);font-size:12px">ENDPOINT</span>
       <span>https://ssh-mcp.appserver.tokyo/mcp?key=YOUR_KEY</span>
+    </div>
+  </div>
+</section>
+
+<div class="divider"></div>
+
+<section class="section">
+  <div class="section__label">💡 TWO WAYS TO USE</div>
+  <h2 class="section__title">2つの使い方</h2>
+  <div class="grid">
+    <div class="card" style="border-top:3px solid var(--ssh-green)">
+      <span class="card__badge card__badge--green">🔧 個人利用</span>
+      <h4>自分専用のSSHクライアント</h4>
+      <p>User Key 1つでシンプルに使う。自分のセッションだけ見える。</p>
+      <div style="margin-top:12px;padding:8px 12px;background:var(--ssh-bg);border-radius:6px;font-size:13px;line-height:1.8">
+        「Proxmoxに繋いで、コンテナの一覧見せて」<br>
+        「101を起動して、npm run buildして」<br>
+        「Nginxの設定を修正してリロードして」
+      </div>
+    </div>
+    <div class="card" style="border-top:3px solid var(--ssh-cyan)">
+      <span class="card__badge card__badge--cyan">🛠️ チーム運用</span>
+      <h4>インフラ管理基盤として</h4>
+      <p>Admin Key + 複数User Keyでチーム運用。セッション共有も可能。</p>
+      <div style="margin-top:12px;padding:8px 12px;background:var(--ssh-bg);border-radius:6px;font-size:13px;line-height:1.8">
+        Admin: 「horiとtanakaのUser Keyを作って」<br>
+        hori: 「本番に繋いで」→ tokenをtanakaに共有<br>
+        tanaka: 「そのtokenでログ確認して」
+      </div>
     </div>
   </div>
 </section>
@@ -57,7 +86,7 @@
     <div class="card" style="border-top:3px solid var(--ssh-green)">
       <span class="card__badge card__badge--green">✅ SSH MCP</span>
       <h4>「ブラウザだけで全部できる」</h4>
-      <p>Claude.aiに「Proxmoxに繋いで」と言うだけ。SSH接続、コマンド実行、ファイル操作 — セッションは3ヶ月維持。</p>
+      <p>Claude.aiに「Proxmoxに繋いで」と言うだけ。セッションは3ヶ月維持。session_tokenは他人にも共有可能。</p>
     </div>
   </div>
 </section>
@@ -96,7 +125,29 @@
     <div class="spec"><div class="spec__value">10</div><div class="spec__label">MCPツール</div></div>
     <div class="spec"><div class="spec__value">SHA-256</div><div class="spec__label">セッショントークン</div></div>
     <div class="spec"><div class="spec__value">3ヶ月</div><div class="spec__label">セッションTTL (使用済)</div></div>
-    <div class="spec"><div class="spec__value">3層</div><div class="spec__label">認証モデル</div></div>
+    <div class="spec"><div class="spec__value">3層</div><div class="spec__label">認証 + マルチキー</div></div>
+  </div>
+</section>
+
+<div class="divider"></div>
+
+<section class="section">
+  <div class="section__label">🔑 MULTI-KEY</div>
+  <h2 class="section__title">マルチキー対応</h2>
+  <p class="section__desc"><code>?key=</code> は複数指定可能。Admin Key と User Key の混在もOK。</p>
+  <div class="terminal" style="font-size:14px;padding:16px 20px">?key=ak_xxx&key=uk_aaa&key=uk_bbb</div>
+  <table class="tool-table" style="margin-top:24px">
+    <thead><tr><th>パターン</th><th>ssh_connect</th><th>ssh_list</th><th>admin操作</th></tr></thead>
+    <tbody>
+      <tr><td>Admin のみ</td><td>✗</td><td>全セッション</td><td>✓</td></tr>
+      <tr><td>User ×1</td><td>✓ primary所有</td><td>自分のみ</td><td>✗</td></tr>
+      <tr><td>User ×2</td><td>✓ primary所有</td><td>両方の和集合</td><td>✗</td></tr>
+      <tr><td><strong>Admin + User ×1</strong></td><td>✓ user所有</td><td>全セッション</td><td>✓</td></tr>
+      <tr><td><strong>Admin + User ×2</strong></td><td>✓ primary所有</td><td>全セッション</td><td>✓</td></tr>
+    </tbody>
+  </table>
+  <div style="margin-top:16px;padding:12px 16px;background:var(--ssh-green-light);border-radius:8px;font-size:13px;line-height:1.7;color:#065F46">
+    💡 <strong>おすすめ：</strong> <code>?key=ak_xxx&key=uk_hori</code> の最強構成。管理もSSH接続も1つのコネクターで全部できます。
   </div>
 </section>
 
@@ -106,18 +157,18 @@
   <div class="section__label">🛠️ TOOLS</div>
   <h2 class="section__title">ツール一覧（10ツール）</h2>
   <table class="tool-table">
-    <thead><tr><th>ツール</th><th>Admin</th><th>User</th><th>説明</th></tr></thead>
+    <thead><tr><th>ツール</th><th>Admin</th><th>User</th><th>token必要</th><th>説明</th></tr></thead>
     <tbody>
-      <tr><td><code>ssh_connect</code></td><td>✗</td><td>✓</td><td>SSH接続 → session_token返却</td></tr>
-      <tr><td><code>ssh_execute</code></td><td>✓</td><td>✓</td><td>シェルコマンド実行</td></tr>
-      <tr><td><code>ssh_disconnect</code></td><td>✓</td><td>✓</td><td>セッション切断</td></tr>
-      <tr><td><code>ssh_list_sessions</code></td><td>✓全部</td><td>✓自分</td><td>セッション一覧</td></tr>
-      <tr><td><code>ssh_upload_file</code></td><td>✓</td><td>✓</td><td>SFTPファイル送信</td></tr>
-      <tr><td><code>ssh_download_file</code></td><td>✓</td><td>✓</td><td>SFTPファイル取得</td></tr>
-      <tr><td><code>user_key_create</code></td><td>✓</td><td>✗</td><td>User Key発行</td></tr>
-      <tr><td><code>user_key_list</code></td><td>✓</td><td>✗</td><td>User Key一覧</td></tr>
-      <tr><td><code>user_key_delete</code></td><td>✓</td><td>✗</td><td>User Key削除</td></tr>
-      <tr><td><code>whoami</code></td><td>✓</td><td>✓</td><td>現在のキー情報</td></tr>
+      <tr><td><code>ssh_connect</code></td><td>✗</td><td>✓</td><td>—</td><td>SSH接続 → session_token返却</td></tr>
+      <tr><td><code>ssh_execute</code></td><td>✓</td><td>✓</td><td>✓</td><td>シェルコマンド実行</td></tr>
+      <tr><td><code>ssh_disconnect</code></td><td>✓</td><td>✓</td><td>✓</td><td>セッション切断</td></tr>
+      <tr><td><code>ssh_list_sessions</code></td><td>✓全部</td><td>✓自分</td><td>—</td><td>セッション一覧</td></tr>
+      <tr><td><code>ssh_upload_file</code></td><td>✓</td><td>✓</td><td>✓</td><td>SFTPファイル送信</td></tr>
+      <tr><td><code>ssh_download_file</code></td><td>✓</td><td>✓</td><td>✓</td><td>SFTPファイル取得</td></tr>
+      <tr><td><code>user_key_create</code></td><td>✓</td><td>✗</td><td>—</td><td>User Key発行</td></tr>
+      <tr><td><code>user_key_list</code></td><td>✓</td><td>✗</td><td>—</td><td>User Key一覧</td></tr>
+      <tr><td><code>user_key_delete</code></td><td>✓</td><td>✗</td><td>—</td><td>User Key削除</td></tr>
+      <tr><td><code>whoami</code></td><td>✓</td><td>✓</td><td>—</td><td>現在のキー情報</td></tr>
     </tbody>
   </table>
 </section>

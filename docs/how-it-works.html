@@ -4,7 +4,7 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width,initial-scale=1">
 <title>仕組み — SSH MCP Server</title>
-<meta name="description" content="SSH MCP Serverのアーキテクチャ、3層認証モデル、セッション管理の仕組み。">
+<meta name="description" content="SSH MCP Serverのアーキテクチャ、3層認証モデル、マルチキー対応、セッション管理の仕組み。">
 <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'><rect width='32' height='32' rx='7' fill='%230F172A'/><text x='5' y='22' font-family='monospace' font-size='16' fill='%2310B981'>$_</text></svg>">
 <link rel="stylesheet" href="style.css">
 </head>
@@ -21,7 +21,7 @@
     <li><a href="getting-started.html">始め方</a></li>
     <li><a href="https://github.com/DaisukeHori/ssh-mcp-server" target="_blank">GitHub</a></li>
   </ul>
-  <span class="badge"><span class="badge__dot"></span> 10 Tools</span>
+  <span class="badge"><span class="badge__dot"></span> v2.1</span>
 </div></nav>
 
 <section class="section" style="padding-top:48px">
@@ -33,7 +33,7 @@
 
 Claude.ai (ブラウザ / モバイル)
     │
-    │  POST /mcp?key=uk_xxx
+    │  POST /mcp?key=ak_xxx&key=uk_aaa
     │  HTTPS (Anthropic Cloud → Cloudflare Tunnel)
     ▼
 ┌──────────────────────────────────────┐
@@ -41,6 +41,7 @@ Claude.ai (ブラウザ / モバイル)
 │                                      │
 │  Express + Streamable HTTP MCP       │
 │  ?key= → KeyStore → CallerContext    │
+│  (複数キー → 1つのコンテキスト)      │
 │                                      │
 │  SSH Session Manager (in-memory)     │
 │  session_token = SHA-256 capability  │
@@ -56,32 +57,60 @@ Claude.ai (ブラウザ / モバイル)
 <section class="section">
   <div class="section__label">🔑 AUTHENTICATION</div>
   <h2 class="section__title">3層認証モデル</h2>
-  <p class="section__desc">門番（API Key） → 接続権（User Key） → 操作権（Session Token）</p>
-  <div class="grid">
+  <p class="section__desc">門番（Admin Key） → 接続権（User Key） → 操作権（Session Token）</p>
+  <div class="grid" style="grid-template-columns:repeat(3,1fr)">
     <div class="card" style="border-top:3px solid #EF4444">
       <span class="card__badge" style="background:#FEF2F2;color:#DC2626">LAYER 1</span>
       <h4>Admin Key</h4>
-      <p>環境変数で設定。サーバー管理専用。User Keyの発行/一覧/削除、全セッションの閲覧と操作が可能。SSHの新規接続は不可（権限分離）。</p>
-      <div style="margin-top:12px;padding:8px 12px;background:var(--ssh-bg);border-radius:6px;font-size:13px">
-        <code>?key=ak_a8f3b2c1...</code>
-      </div>
+      <p>環境変数で設定。User Key CRUD、全セッション閲覧。SSH新規接続は不可（権限分離）。</p>
+      <div style="margin-top:8px;font-family:monospace;font-size:12px;color:var(--ssh-text-light)">?key=ak_a8f3b2c1...</div>
     </div>
     <div class="card" style="border-top:3px solid var(--ssh-green)">
       <span class="card__badge card__badge--green">LAYER 2</span>
       <h4>User Key</h4>
-      <p>Admin KeyでMCP経由発行。Claude.aiのカスタムコネクターURLに入れて使う。SSH接続の作成権を持つ。自分のセッションのみ一覧可能。</p>
-      <div style="margin-top:12px;padding:8px 12px;background:var(--ssh-bg);border-radius:6px;font-size:13px">
-        <code>?key=uk_84e17ac6...</code>
-      </div>
+      <p>MCP経由で発行。SSH接続の作成権。自分のセッションのみ一覧可能。</p>
+      <div style="margin-top:8px;font-family:monospace;font-size:12px;color:var(--ssh-text-light)">?key=uk_84e17ac6...</div>
     </div>
     <div class="card" style="border-top:3px solid var(--ssh-cyan)">
       <span class="card__badge card__badge--cyan">LAYER 3</span>
       <h4>Session Token</h4>
-      <p>ssh_connectの戻り値。SHA-256ハッシュで、<strong>持っていれば誰でも操作可能</strong>（ケイパビリティトークン）。会話履歴に自然に残るので次のメッセージで継続利用。</p>
-      <div style="margin-top:12px;padding:8px 12px;background:var(--ssh-bg);border-radius:6px;font-size:13px">
-        <code>sess_e7b2a4f1c3d8...</code>
-      </div>
+      <p>ssh_connectの戻り値。SHA-256ハッシュ。<strong>持っていれば誰でも操作可能</strong>。</p>
+      <div style="margin-top:8px;font-family:monospace;font-size:12px;color:var(--ssh-text-light)">sess_e7b2a4f1c3d8...</div>
     </div>
+  </div>
+</section>
+
+<div class="divider"></div>
+
+<section class="section">
+  <div class="section__label">🔗 MULTI-KEY</div>
+  <h2 class="section__title">マルチキー対応</h2>
+  <p class="section__desc"><code>?key=</code> を複数指定すると、それぞれの権限が合成されます。</p>
+
+  <div class="terminal" style="font-size:14px">
+<span class="comment"># 最強構成: 管理もSSH接続も1つのコネクターで</span>
+?key=ak_xxx&key=uk_hori
+
+<span class="comment"># 2人のセッションを両方見たい</span>
+?key=uk_hori&key=uk_tanaka
+
+<span class="comment"># 管理者が複数ユーザーを同時管理</span>
+?key=ak_xxx&key=uk_hori&key=uk_tanaka
+</div>
+
+  <table class="tool-table" style="margin-top:24px">
+    <thead><tr><th>パターン</th><th>ssh_connect</th><th>ssh_list</th><th>admin操作</th></tr></thead>
+    <tbody>
+      <tr><td>Admin のみ</td><td>✗ 拒否</td><td>全セッション</td><td>✓</td></tr>
+      <tr><td>User ×1</td><td>✓ primary所有</td><td>自分のみ</td><td>✗</td></tr>
+      <tr><td>User ×2</td><td>✓ primary所有</td><td>両方の和集合</td><td>✗</td></tr>
+      <tr style="background:var(--ssh-green-light)"><td><strong>Admin + User ×1</strong></td><td>✓ user所有</td><td>全セッション</td><td>✓</td></tr>
+      <tr style="background:var(--ssh-green-light)"><td><strong>Admin + User ×2</strong></td><td>✓ primary所有</td><td>全セッション</td><td>✓</td></tr>
+    </tbody>
+  </table>
+
+  <div style="margin-top:16px;padding:12px 16px;background:var(--ssh-green-light);border-radius:8px;font-size:13px;line-height:1.7;color:#065F46">
+    💡 <strong>Primary User Key</strong> = <code>?key=</code> パラメータで最初に指定したUser Key。ssh_connectで新しいセッションの所有者になります。
   </div>
 </section>
 
@@ -97,7 +126,7 @@ Claude.ai (ブラウザ / モバイル)
 <span class="output">→ state: CREATED (TTL: 1日)</span>
 
 <span class="prompt">$</span> ssh_execute(sess_..., "uptime")
-<span class="output">→ state: USED (TTL: 3ヶ月 from last use)</span>
+<span class="output">→ state: USED (TTL: 最終使用から3ヶ月)</span>
 
 <span class="comment"># 3ヶ月後...</span>
 <span class="output">→ state: EXPIRED (auto-disconnected)</span>
@@ -109,12 +138,12 @@ Claude.ai (ブラウザ / モバイル)
 
   <div class="grid" style="margin-top:24px">
     <div class="card">
-      <h4>🆕 未使用セッション</h4>
-      <p>ssh_connect後、ssh_execute/upload/downloadを<strong>一度も実行していない</strong>状態。最終使用から<strong>1日</strong>で自動切断。放置防止。</p>
+      <h4>🆕 未使用 (TTL: 1日)</h4>
+      <p>ssh_connect後、execute/upload/downloadを<strong>一度も実行していない</strong>。放置防止のため短め。</p>
     </div>
     <div class="card">
-      <h4>✅ 使用済セッション</h4>
-      <p>ssh_execute/upload/downloadを<strong>1回以上実行</strong>した状態。最終使用から<strong>3ヶ月</strong>で自動切断。長期利用を想定。</p>
+      <h4>✅ 使用済 (TTL: 3ヶ月)</h4>
+      <p>execute/upload/downloadを<strong>1回以上実行</strong>。最終使用時刻から3ヶ月。長期利用を想定。</p>
     </div>
   </div>
 </section>
@@ -126,20 +155,20 @@ Claude.ai (ブラウザ / モバイル)
   <h2 class="section__title">セキュリティ設計</h2>
   <div class="grid">
     <div class="card">
-      <h4>🔐 通信の暗号化</h4>
-      <p>Cloudflare Tunnel経由のHTTPS。Claude.ai → Anthropic Cloud → Cloudflare → LXC 全経路がTLS暗号化。直接ポート公開なし。</p>
+      <h4>🔐 全経路HTTPS</h4>
+      <p>Cloudflare Tunnel経由。Claude.ai → Anthropic → Cloudflare → LXC 全てTLS暗号化。直接ポート公開なし。</p>
     </div>
     <div class="card">
-      <h4>🗑️ SSH認証情報の非保存</h4>
-      <p>パスワード/秘密鍵はMCPリクエスト内でのみ使用。サーバーに保存もログ出力もしない。再起動で全セッション消去。</p>
+      <h4>🗑️ 認証情報の非保存</h4>
+      <p>SSHパスワード/秘密鍵はリクエスト処理中のみ使用。保存もログ出力もしない。再起動で全セッション消去。</p>
     </div>
     <div class="card">
-      <h4>🔗 ケイパビリティトークン</h4>
-      <p>session_tokenはSHA-256ハッシュ。SSH接続情報を逆算不可能。256bitでブルートフォース不可能。</p>
+      <h4>🔗 SHA-256トークン</h4>
+      <p>session_tokenは256bitハッシュ。SSH接続情報を逆算不可能。ブルートフォース不可能。</p>
     </div>
     <div class="card">
-      <h4>📂 ソースコード公開</h4>
-      <p>全コードがGitHubで公開。認証・セッション管理の実装を誰でも監査可能。</p>
+      <h4>📂 全コード公開</h4>
+      <p>GitHubで完全公開。認証・セッション管理の実装を誰でも監査可能。</p>
     </div>
   </div>
 </section>
@@ -149,7 +178,7 @@ Claude.ai (ブラウザ / モバイル)
 <section class="section" style="text-align:center">
   <div class="cta">
     <h3>セットアップは4ステップ</h3>
-    <p>LXCデプロイ → Cloudflare Tunnel → コネクター登録 → 完了。</p>
+    <p>LXCデプロイ → Admin Key生成 → Cloudflare Tunnel → コネクター登録</p>
     <a href="getting-started.html" class="btn btn--primary" style="font-size:15px;padding:12px 28px">🚀 始め方へ</a>
   </div>
 </section>

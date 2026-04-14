@@ -5,6 +5,7 @@
 [![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](LICENSE)
 [![Node.js](https://img.shields.io/badge/Node.js-22+-339933.svg)](https://nodejs.org/)
 [![MCP](https://img.shields.io/badge/MCP-Streamable_HTTP-8B5CF6.svg)](https://modelcontextprotocol.io/)
+[![Tools](https://img.shields.io/badge/Tools-10-10B981.svg)](#ツール一覧10ツール)
 
 > **エンドポイント:** `https://ssh-mcp.appserver.tokyo/mcp?key=YOUR_KEY`
 > **LP:** [daisukehori.github.io/ssh-mcp-server](https://daisukehori.github.io/ssh-mcp-server/)
@@ -13,9 +14,35 @@ Claude.aiのチャットから `ssh_connect` するだけで、ローカルネ�
 
 Proxmox管理、LXCコンテナ操作、デプロイ、ログ確認、ファイル編集 — ブラウザさえあればどこからでも。
 
+
+## 2つの使い方
+
+### 🔧 自分専用のSSHクライアントとして
+
+User Key 1つでシンプルに使う。自分のセッションだけ見える。
+
+```
+「Proxmoxに繋いで、コンテナの一覧見せて」
+「101を起動して、git pullしてnpm run buildして」
+「Nginxの設定ファイルを確認して修正して」
+```
+
+### 🛠️ チームのインフラ管理基盤として
+
+Admin Key + 複数User Keyでチーム運用。セッション共有も可能。
+
+```
+Admin: 「horiとtanakaのUser Keyを作って」
+hori:   「本番サーバーに繋いで」→ session_tokenをtanakaに共有
+tanaka: 「そのsession_tokenでログ確認して」
+```
+
+
 ## なぜ必要か
 
-Claude.aiにはコード実行環境がありますが、あなたのローカルサーバーにはアクセスできません。Claude DesktopやClaude Codeなら手元のターミナルが使えますが、**出先でスマホやブラウザだけの状況**では何もできません。
+Claude.aiは強力ですが、**あなたのローカルサーバーにはアクセスできません。**
+
+Claude Desktop / Claude Code なら手元のターミナルが使えますが、**出先でスマホやブラウザだけの状況**では何もできません。
 
 SSH MCPがあれば：
 
@@ -32,18 +59,18 @@ AI: SSH接続しました (session_token: sess_a3f8...)
 あなた: 「101を起動して、npm run buildして」
 
 AI: pct start 101 → OK
-    pct exec 101 -- bash -c "cd /opt/app && npm run build"
-    Build completed successfully (12.3s)
+    cd /opt/app && npm run build → Build completed (12.3s)
 ```
 
 これが**ブラウザのClaude.aiだけで**できます。
+
 
 ## アーキテクチャ
 
 ```
 Claude.ai (ブラウザ / モバイル)
     │
-    │  ?key=uk_xxx (URL パラメータ認証)
+    │  ?key=ak_xxx&key=uk_aaa (複数キー対応)
     ▼
 Cloudflare Tunnel (HTTPS)
     │
@@ -69,25 +96,26 @@ Cloudflare Tunnel (HTTPS)
                   └──────────────────┘
 ```
 
+
 ## 認証モデル
 
 ```
-               ?key=xxx (URLパラメータ)
+          ?key=ak_xxx&key=uk_aaa&key=uk_bbb
                      │
-          ┌──────────┴──────────┐
-          ▼                     ▼
-     Admin Key             User Key
-     (env変数)            (user-keys.json)
-          │                     │
-          │               ssh_connect()
-          │                     │
-          │                     ▼
-          │              session_token
-          │           (SHA-256 ケイパビリティ)
-          ▼                     │
-     全セッション閲覧      ┌────┴────┐
-     User Key CRUD         │ 共有可能 │
-                           └─────────┘
+        ┌────────────┼────────────┐
+        ▼            ▼            ▼
+   Admin Key    User Key A   User Key B
+   (env変数)    (primary)    (secondary)
+        │            │
+        │      ssh_connect()
+        │            │
+        │            ▼
+        │     session_token
+        │     (SHA-256, 共有可能)
+        ▼            │
+   全セッション閲覧   ┌────┴────┐
+   User Key CRUD      │ 共有可能 │
+                      └─────────┘
 ```
 
 **3層の認証：**
@@ -106,24 +134,31 @@ Cloudflare Tunnel (HTTPS)
 ?key=ak_xxx&key=uk_aaa&key=uk_bbb
 ```
 
-| パターン | 例 | ssh_connect | ssh_list | admin操作 |
+**全パターンの動作表：**
+
+| パターン | ssh_connect | ssh_list_sessions | admin操作 | whoami |
 |:--|:--|:--|:--|:--|
-| Admin のみ | `?key=ak_xxx` | ✗ | 全セッション | ✓ |
-| User ×1 | `?key=uk_aaa` | ✓ (uk_aaa所有) | uk_aaaのみ | ✗ |
-| User ×2 | `?key=uk_aaa&key=uk_bbb` | ✓ (uk_aaa所有) | uk_aaa ∪ uk_bbb | ✗ |
-| Admin + User ×1 | `?key=ak_xxx&key=uk_aaa` | ✓ (uk_aaa所有) | 全セッション | ✓ |
-| Admin + User ×2 | `?key=ak_xxx&key=uk_aaa&key=uk_bbb` | ✓ (uk_aaa所有) | 全セッション | ✓ |
+| Admin のみ | ✗ 拒否 | 全セッション | ✓ | admin情報 |
+| User ×1 | ✓ uk_aaa所有 | uk_aaaのみ | ✗ | user情報 |
+| User ×2 | ✓ uk_aaa所有(primary) | uk_aaa ∪ uk_bbb | ✗ | 全key情報 |
+| Admin + User ×1 | ✓ uk_aaa所有 | 全セッション | ✓ | 全key情報 |
+| Admin + User ×2 | ✓ uk_aaa所有(primary) | 全セッション | ✓ | 全key情報 |
 
+**ルール：**
 - **ssh_connect** → Primary User Key（最初のUser Key）が所有者
-- **ssh_list_sessions** → Admin Key がある場合は全セッション、なければ全User Keyのセッションの和集合
-- **ssh_execute等** → session_tokenのケイパビリティ（キーの種類に関係なく操作可能）
-- **admin操作** → Admin Keyが含まれている場合のみ実行可能
+- **ssh_list_sessions** → Admin Key含む場合は全表示、User Keyのみなら和集合
+- **ssh_execute等** → session_tokenのケイパビリティ（キーの種類に関係なし）
+- **admin操作** → Admin Keyが含まれている場合のみ
 
-**典型的な使い方:**
-- 普段使い: `?key=uk_hori`
-- 管理者が全体管理: `?key=ak_xxx`
-- 管理者が自分も作業: `?key=ak_xxx&key=uk_hori` ← 最強構成
-- 他人のセッションも見たい: `?key=uk_hori&key=uk_tanaka`
+**典型的な使い方：**
+
+| ユースケース | キー構成 |
+|:--|:--|
+| 普段使い | `?key=uk_hori` |
+| 管理者が全体管理 | `?key=ak_xxx` |
+| 管理者が自分も作業（最強構成） | `?key=ak_xxx&key=uk_hori` |
+| 他人のセッションも見たい | `?key=uk_hori&key=uk_tanaka` |
+
 
 ## ツール一覧（10ツール）
 
@@ -147,6 +182,7 @@ Cloudflare Tunnel (HTTPS)
 | `user_key_delete` | ✓ | ✗ | User Keyを削除 |
 | `whoami` | ✓ | ✓ | 現在のキー情報を表示 |
 
+
 ## セッション管理
 
 ### session_token = ケイパビリティトークン
@@ -163,25 +199,26 @@ Cloudflare Tunnel (HTTPS)
 | 未使用 | 最終使用から**1日** | ssh_connect後、execute/upload/downloadを一度も実行していない |
 | 使用済 | 最終使用から**3ヶ月** | execute/upload/downloadを1回以上実行済み |
 
-- サーバー再起動で全セッション破棄（SSH接続はインメモリ）
-- session_tokenのメタデータは永続化しない（シンプルさ優先）
+- サーバー再起動で全SSH接続が破棄される（インメモリ）
+- User Keysは `user-keys.json` に永続化されているため影響なし
+
 
 ## 🔒 セキュリティ
 
 **Q: URLパラメータにキーを入れて大丈夫？**
 
 - 通信は全て **HTTPS (Cloudflare Tunnel + TLS)** で暗号化
-- Cloudflareのアクセスログにクエリパラメータが記録される可能性はあるが、Tunnel経由の自前サーバーなので外部に漏洩するリスクは限定的
+- Cloudflareのアクセスログにクエリパラメータが記録される可能性はあるが、Tunnel経由の自前サーバーなので外部漏洩リスクは限定的
 - SSHパスワード/秘密鍵は **MCPリクエスト内でのみ使用** され、サーバー側に保存もログ出力もしない
 - セッションは **インメモリのみ** （再起動で消去）
-- User Keysは `user-keys.json` に平文保存（LXC内部のみアクセス前提）
 - ソースコードは**全て公開**
 
-**セキュリティ設計の要点：**
+**設計の要点：**
 - Admin Key → 環境変数（サーバー内）
 - User Key → MCP経由でCRUD（user-keys.json永続化）
 - Session Token → SHA-256ハッシュ（推測不可能、共有可能）
 - SSH認証情報 → リクエスト処理中のみ使用、保存しない
+
 
 ## クイックスタート（4ステップ）
 
@@ -201,13 +238,11 @@ npm install && npx tsc
 ### ステップ2: Admin Keyを生成して起動
 
 ```bash
-# Admin Key生成
 export ADMIN_KEY=$(openssl rand -hex 32)
 echo "Admin Key: $ADMIN_KEY"  # ⚠️ 保存！
 
 # テスト起動
 node dist/index.js
-# → http://localhost:3000/health で確認
 
 # systemdサービス化
 cat > /etc/systemd/system/ssh-mcp-server.service << EOF
@@ -233,29 +268,50 @@ systemctl enable --now ssh-mcp-server
 
 ### ステップ3: Cloudflare Tunnel設定
 
-cloudflaredのconfig.ymlにingress追加：
-
 ```yaml
+# cloudflaredのconfig.yml
 ingress:
   - hostname: ssh-mcp.appserver.tokyo
     service: http://localhost:3000
+  - service: http_status:404
 ```
 
 ### ステップ4: Claude.aiでコネクター登録
 
-**Admin接続（User Key発行用）：**
-1. Claude.ai → Settings → Connectors → Add Custom Connector
-2. URL: `https://ssh-mcp.appserver.tokyo/mcp?key=YOUR_ADMIN_KEY`
+**方法A: 管理者用（最強構成）**
 
-**User Key発行：**
-```
-あなた: 「horiというユーザーキーを作って」
-AI: user_key_create("hori") → uk_84e17ac6...
+Admin + 自分のUser Keyを1つのコネクターで：
+
+1. まずAdmin Keyだけで接続し、User Keyを発行：
+   - URL: `https://ssh-mcp.appserver.tokyo/mcp?key=YOUR_ADMIN_KEY`
+   - チャット: `「horiというUser Keyを作って」`
+2. コネクターを更新（両方のキーを含む）：
+   - URL: `https://ssh-mcp.appserver.tokyo/mcp?key=YOUR_ADMIN_KEY&key=uk_発行されたキー`
+
+**方法B: ユーザー用**
+
+発行されたUser Keyだけで接続：
+- URL: `https://ssh-mcp.appserver.tokyo/mcp?key=uk_発行されたキー`
+
+**Claude Desktop / Cursor / VS Code:**
+```json
+{
+  "mcpServers": {
+    "ssh": {
+      "command": "npx",
+      "args": ["-y", "mcp-remote",
+        "https://ssh-mcp.appserver.tokyo/mcp?key=YOUR_KEY"]
+    }
+  }
+}
 ```
 
-**User接続（普段使い）：**
-1. Claude.ai → Settings → Connectors → Add Custom Connector
-2. URL: `https://ssh-mcp.appserver.tokyo/mcp?key=uk_84e17ac6...`
+**Claude Code:**
+```bash
+claude mcp add --transport http ssh-mcp \
+  "https://ssh-mcp.appserver.tokyo/mcp?key=YOUR_KEY"
+```
+
 
 ## 使用例
 
@@ -270,11 +326,10 @@ AI: ssh_connect(host="192.168.70.226", username="root", password="xxx")
 
 あなた: 「コンテナの一覧を見せて」
 
-AI: ssh_execute(sess_a3f8b2c1e7d4..., "pct list")
+AI: ssh_execute(sess_a3f8..., "pct list")
     VMID  Status   Name
     100   running  web-app
     101   stopped  dev-env
-    400   running  ssh-mcp
 ```
 
 ### ファイル操作
@@ -287,7 +342,7 @@ AI: ssh_download_file(sess_..., "/etc/nginx/nginx.conf")
 
 あなた: 「server_nameをexample.comに変更して」
 
-AI: ssh_upload_file(sess_..., "修正済み設定内容", "/etc/nginx/nginx.conf")
+AI: ssh_upload_file(sess_..., "修正済み内容", "/etc/nginx/nginx.conf")
     ssh_execute(sess_..., "nginx -t && systemctl reload nginx")
     設定テスト通過、リロード完了。
 ```
@@ -299,15 +354,26 @@ AI: ssh_upload_file(sess_..., "修正済み設定内容", "/etc/nginx/nginx.conf
 AI: sess_a3f8b2c1...
 
 あなた (User B, 別の会話): 「sess_a3f8b2c1... でpct listして」
-AI: ssh_execute(sess_a3f8b2c1..., "pct list")
-    [結果表示]
+AI: [そのまま操作可能]
 ```
+
+### マルチキーでの管理作業
+
+```
+（?key=ak_xxx&key=uk_hori で接続中）
+
+あなた: 「tanakaのUser Keyを作って、あと全セッション見せて」
+
+AI: user_key_create("tanaka") → uk_b82d45c6...  [Admin Key権限で実行]
+    ssh_list_sessions → 全3セッション表示    [Admin Key権限で全表示]
+```
+
 
 ## ⚠️ 重要な注意事項
 
-### ssh_executeの破壊的コマンド
+### 破壊的コマンド
 
-`ssh_execute` はリモートホストで**任意のシェルコマンドを実行**します。以下に特に注意：
+`ssh_execute` はリモートホストで**任意のシェルコマンドを実行**します。
 
 | コマンド | リスク |
 |:--|:--|
@@ -316,23 +382,24 @@ AI: ssh_execute(sess_a3f8b2c1..., "pct list")
 | `systemctl stop` | サービス停止 |
 | `dd if=/dev/zero` | ディスク破壊 |
 
-→ AIは確認を求めますが、最終的な責任はユーザーにあります。
+AIは確認を求めますが、最終的な責任はユーザーにあります。
 
 ### サーバー再起動
 
 - 全SSH接続がインメモリのため、再起動で**全セッション消失**
 - session_tokenは無効化される
-- User Keysは `user-keys.json` に永続化されているため影響なし
+- User Keysは永続化されているため影響なし
 
 ### 出力サイズ制限
 
 | 対象 | 制限 |
 |:--|:--|
-| stdout / stderr | 各512KB（超過分は切り捨て） |
-| ssh_download_file | 512KB（超過でエラー） |
+| stdout / stderr | 各512KB |
+| ssh_download_file | 512KB |
 | ssh_upload_file | 1MB |
 
-大きなファイルは `ssh_execute` で `head`, `tail`, `cat | head -c 100000` を使用してください。
+大きなファイルは `ssh_execute` で `head`, `tail`, `cat | head -c 100000` を使用。
+
 
 ## 環境変数
 
@@ -342,39 +409,35 @@ AI: ssh_execute(sess_a3f8b2c1..., "pct list")
 | `PORT` | — | `3000` | HTTPリッスンポート |
 | `DATA_DIR` | — | `cwd()` | user-keys.json保存先 |
 
+
 ## FAQ
 
 **Q: session_tokenを忘れた場合は？**
-→ `ssh_list_sessions` で自分のセッション一覧を確認できます。User Keyで作成したセッションのトークンが表示されます。
+→ `ssh_list_sessions` で一覧確認。User Keyで作成したセッションのトークンが表示されます。
 
-**Q: 3ヶ月放置したセッションはどうなる？**
-→ 自動切断されます。再度 `ssh_connect` してください。
+**Q: 3ヶ月放置したセッションは？**
+→ 自動切断。`ssh_connect` で再接続してください。
 
-**Q: User Keyを削除したら既存セッションはどうなる？**
-→ セッションはTTL期限まで存続します。ただしそのUser Keyで新しい `ssh_list_sessions` や `ssh_connect` はできなくなります。session_tokenを知っていれば操作は可能です。
+**Q: User Keyを削除したら既存セッションは？**
+→ TTL期限まで存続。session_tokenを知っていれば操作可能。ただしそのUser Keyでの新規接続や一覧表示はできなくなります。
 
-**Q: Admin Keyを変更したい場合は？**
-→ 環境変数 `ADMIN_KEY` を変更してサーバーを再起動してください。既存のUser Keysとセッションには影響しません。
+**Q: Admin Keyを変更したい？**
+→ 環境変数を変更して再起動。User Keysやセッションには影響しません。
 
-**Q: 複数のSSHホストに同時接続できる？**
-→ はい。`ssh_connect` を複数回呼んで、それぞれ異なる `session_token` で操作できます。
+**Q: 複数SSHホストに同時接続できる？**
+→ はい。`ssh_connect` を複数回呼んで、それぞれ別のsession_tokenで操作できます。
 
-**Q: Claude Desktop / Claude Code でも使える？**
-→ はい。mcp-remoteを使えばStreamable HTTPサーバーに接続できます。
-```json
-{
-  "mcpServers": {
-    "ssh": {
-      "command": "npx",
-      "args": ["-y", "mcp-remote", "https://ssh-mcp.appserver.tokyo/mcp?key=YOUR_KEY"]
-    }
-  }
-}
-```
+**Q: ?key= にAdmin KeyとUser Keyを両方入れたら？**
+→ 最強構成。User Keyでssh_connect、Admin Keyでuser_key管理、ssh_listは全セッション表示。1つのコネクターで全部できます。
+
+**Q: Claude Desktop / Claude Codeでも使える？**
+→ はい。mcp-remoteでStreamable HTTPサーバーに接続できます（クイックスタート参照）。
+
 
 ## 技術スタック
 
 TypeScript / Express / ssh2 / MCP SDK (Streamable HTTP) / Zod / Cloudflare Tunnel
+
 
 ## ライセンス
 
