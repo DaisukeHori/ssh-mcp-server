@@ -21,7 +21,7 @@
     <li><a href="getting-started.html">始め方</a></li>
     <li><a href="https://github.com/DaisukeHori/ssh-mcp-server" target="_blank">GitHub</a></li>
   </ul>
-  <span class="badge"><span class="badge__dot"></span> v2.1</span>
+  <span class="badge"><span class="badge__dot"></span> 11 Tools</span>
 </div></nav>
 
 <section class="section" style="padding-top:48px">
@@ -159,6 +159,10 @@ Claude.ai (ブラウザ / モバイル)
       <p>Cloudflare Tunnel経由。Claude.ai → Anthropic → Cloudflare → LXC 全てTLS暗号化。直接ポート公開なし。</p>
     </div>
     <div class="card">
+      <h4>🛡️ セルフSSH防御</h4>
+      <p>サーバー自身へのSSH接続を<strong>ブロック</strong>。ADMIN_KEYやWEBHOOK_SECRETの漏洩を防止。<code>BLOCKED_HOSTS</code>環境変数 + localhost系は常時ブロック。</p>
+    </div>
+    <div class="card">
       <h4>🗑️ 認証情報の非保存</h4>
       <p>SSHパスワード/秘密鍵はリクエスト処理中のみ使用。保存もログ出力もしない。再起動で全セッション消去。</p>
     </div>
@@ -166,10 +170,63 @@ Claude.ai (ブラウザ / モバイル)
       <h4>🔗 SHA-256トークン</h4>
       <p>session_tokenは256bitハッシュ。SSH接続情報を逆算不可能。ブルートフォース不可能。</p>
     </div>
+  </div>
+</section>
+
+<div class="divider"></div>
+
+<section class="section">
+  <div class="section__label">⚡ ASYNC COMMANDS</div>
+  <h2 class="section__title">非同期コマンド実行</h2>
+  <p class="section__desc"><code>apt install</code> や <code>npm run build</code> など、数分〜数十分かかるコマンドに対応。MCPタイムアウトを超える長時間コマンドも安全に実行。</p>
+
+  <div class="terminal">
+<span class="comment"># 5秒待って途中結果を取得（デフォルト30秒）</span>
+<span class="prompt">$</span> ssh_execute(command="apt install -y nodejs", wait_ms=5000)
+<span class="output">→ command_id: cmd_0001, running: true</span>
+<span class="output">→ stdout: "Reading package lists..."</span>
+
+<span class="comment"># 後からポーリング（末尾10行だけ取得）</span>
+<span class="prompt">$</span> ssh_command_status(command_id="cmd_0001", tail_lines=10)
+<span class="output">→ running: false, exit_code: 0, elapsed_ms: 34521</span>
+
+<span class="comment"># fire-and-forget（即座に返る）</span>
+<span class="prompt">$</span> ssh_execute(command="nohup ./deploy.sh &", wait_ms=0)
+<span class="output">→ command_id: cmd_0002, running: true（バックグラウンド実行）</span>
+</div>
+
+  <div class="grid" style="margin-top:24px">
     <div class="card">
-      <h4>📂 全コード公開</h4>
-      <p>GitHubで完全公開。認証・セッション管理の実装を誰でも監査可能。</p>
+      <h4>wait_ms</h4>
+      <p>コマンドの出力を何ms待つか。<code>0</code>で即座に返す。デフォルト30秒。最大120秒。</p>
     </div>
+    <div class="card">
+      <h4>tail_lines</h4>
+      <p>大量出力の末尾N行のみ返す。<code>apt install</code>の進捗確認等に有効。</p>
+    </div>
+    <div class="card">
+      <h4>command_id</h4>
+      <p>各コマンドに<code>cmd_0001</code>形式のIDが付与。<code>ssh_command_status</code>で後からポーリング可能。結果は1時間保持。</p>
+    </div>
+  </div>
+</section>
+
+<div class="divider"></div>
+
+<section class="section">
+  <div class="section__label">🔄 CI/CD</div>
+  <h2 class="section__title">GitHub Webhook自動デプロイ</h2>
+  <p class="section__desc">GitHubにPushするだけで本番サーバーが自動更新。約5秒で新コードが稼働。</p>
+  <div class="terminal">
+git push → GitHub Webhook
+  → POST /webhook/github
+  → HMAC-SHA256署名検証
+  → git pull → npm install → tsc
+  → process.exit(0) → systemd再起動
+  → <span class="prompt">約5秒で本番更新完了</span>
+</div>
+  <div style="margin-top:16px;padding:12px 16px;background:var(--ssh-green-light);border-radius:8px;font-size:13px;line-height:1.7;color:#065F46">
+    💡 デプロイ失敗時は旧コードのまま稼働継続します（process.exitしない）。
   </div>
 </section>
 

@@ -5,7 +5,7 @@
 [![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](LICENSE)
 [![Node.js](https://img.shields.io/badge/Node.js-22+-339933.svg)](https://nodejs.org/)
 [![MCP](https://img.shields.io/badge/MCP-Streamable_HTTP-8B5CF6.svg)](https://modelcontextprotocol.io/)
-[![Tools](https://img.shields.io/badge/Tools-10-10B981.svg)](#ツール一覧10ツール)
+[![Tools](https://img.shields.io/badge/Tools-11-10B981.svg)](#ツール一覧11ツール)
 
 > **エンドポイント:** デプロイ後のURL `https://your-server.example.com/mcp?key=YOUR_KEY`
 > **LP:** [daisukehori.github.io/ssh-mcp-server](https://daisukehori.github.io/ssh-mcp-server/)
@@ -160,14 +160,15 @@ Cloudflare Tunnel (HTTPS)
 | 他人のセッションも見たい | `?key=uk_hori&key=uk_tanaka` |
 
 
-## ツール一覧（10ツール）
+## ツール一覧（11ツール）
 
 ### SSH操作
 
 | ツール | Admin | User | session_token | 説明 |
 |:--|:--:|:--:|:--:|:--|
 | `ssh_connect` | ✗ | ✓ | — | SSH接続を確立。session_tokenを返す |
-| `ssh_execute` | ✓ | ✓ | 必要 | シェルコマンドを実行 |
+| `ssh_execute` | ✓ | ✓ | 必要 | シェルコマンドを実行（非同期対応） |
+| `ssh_command_status` | ✓ | ✓ | — | 実行中コマンドの結果をポーリング |
 | `ssh_disconnect` | ✓ | ✓ | 必要 | セッションを明示的に切断 |
 | `ssh_list_sessions` | ✓全部 | ✓自分のみ | — | アクティブセッション一覧 |
 | `ssh_upload_file` | ✓ | ✓ | 必要 | SFTPでテキストファイルを送信 |
@@ -203,7 +204,72 @@ Cloudflare Tunnel (HTTPS)
 - User Keysは `user-keys.json` に永続化されているため影響なし
 
 
+## 非同期コマンド実行
+
+`apt install` やビルド処理など、数分〜数十分かかるコマンドに対応。MCPのリクエストタイムアウトを超える長時間コマンドも安全に実行できます。
+
+### 仕組み
+
+```
+ssh_execute(command="apt install -y nodejs", wait_ms=5000)
+  → 5秒待ってその時点の出力 + command_id: "cmd_0001" を返す
+  → running: true（まだ実行中）
+
+ssh_command_status(command_id="cmd_0001", tail_lines=50)
+  → 最新の出力（末尾50行）+ 完了/実行中ステータスを返す
+  → running: false, exit_code: 0（完了）
+```
+
+### ssh_executeのパラメータ
+
+| パラメータ | デフォルト | 説明 |
+|:--|:--|:--|
+| `wait_ms` | `30000` (30秒) | コマンドの出力を何ms待つか。`0`で即座に返す（fire-and-forget） |
+| `tail_lines` | 全行 | 出力の末尾N行のみ返す。大量出力のコマンドに有効 |
+
+### ssh_command_statusのパラメータ
+
+| パラメータ | 説明 |
+|:--|:--|
+| `command_id` | ssh_executeの戻り値に含まれるID（例: `cmd_0001`） |
+| `tail_lines` | 出力の末尾N行のみ返す |
+
+### 戻り値
+
+```json
+{
+  "command_id": "cmd_0001",
+  "command": "apt install -y nodejs",
+  "running": false,
+  "exit_code": 0,
+  "elapsed_ms": 34521,
+  "stdout": "...(出力)...",
+  "stderr": "...",
+  "stdout_lines": 142,
+  "stderr_lines": 3
+}
+```
+
+- 完了したコマンドの結果は**1時間**保持される
+- 各コマンドの出力バッファは最大**2MB**
+
+
 ## 🔒 セキュリティ
+
+### セルフSSH防御
+
+SSH MCPサーバー自身へのSSH接続は**ブロック**されます。これにより、MCPユーザーがサーバーのLXCにSSHしてADMIN_KEYやWEBHOOK_SECRETなどの環境変数を読み取ることを防止します。
+
+**常時ブロック（コード内蔵）:** `127.0.0.1`, `localhost`, `::1`, `0.0.0.0`
+**環境変数で追加:** `BLOCKED_HOSTS=192.168.71.82,ssh-mcp`（サーバー自身のIPとホスト名）
+
+```
+ssh_connect(host="192.168.71.82") → ❌ "Connection blocked"
+ssh_connect(host="localhost")      → ❌ "Connection blocked"
+ssh_connect(host="192.168.70.226") → ✅ 正常接続（Proxmox等）
+```
+
+### 通信の暗号化
 
 **Q: URLパラメータにキーを入れて大丈夫？**
 
@@ -254,6 +320,8 @@ After=network.target
 Type=simple
 WorkingDirectory=/opt/ssh-mcp-server
 Environment=ADMIN_KEY=$ADMIN_KEY
+Environment=BLOCKED_HOSTS=$(hostname -I | tr -d ' '),$(hostname)
+Environment=WEBHOOK_SECRET=$(openssl rand -hex 20)
 Environment=PORT=3000
 ExecStart=/usr/bin/node dist/index.js
 Restart=always
@@ -368,6 +436,27 @@ AI: user_key_create("tanaka") → uk_b82d45c6...  [Admin Key権限で実行]
     ssh_list_sessions → 全3セッション表示    [Admin Key権限で全表示]
 ```
 
+### 長時間コマンドの非同期実行
+
+```
+あなた: 「Node.jsをインストールして」
+
+AI: ssh_execute(command="apt install -y nodejs", wait_ms=5000, tail_lines=10)
+    → command_id: cmd_0001, running: true
+    末尾10行:
+      Reading package lists...
+      Building dependency tree...
+
+あなた: 「終わった？」
+
+AI: ssh_command_status(command_id="cmd_0001", tail_lines=5)
+    → running: false, exit_code: 0, elapsed_ms: 34521
+    末尾5行:
+      Setting up nodejs (22.22.2) ...
+      Processing triggers for man-db ...
+    インストール完了しました（34.5秒）。
+```
+
 
 ## ⚠️ 重要な注意事項
 
@@ -394,11 +483,40 @@ AIは確認を求めますが、最終的な責任はユーザーにあります
 
 | 対象 | 制限 |
 |:--|:--|
-| stdout / stderr | 各512KB |
+| ssh_execute stdout/stderr（同期） | 各2MB（コマンドバッファ） |
 | ssh_download_file | 512KB |
 | ssh_upload_file | 1MB |
 
 大きなファイルは `ssh_execute` で `head`, `tail`, `cat | head -c 100000` を使用。
+大量出力のコマンドは `tail_lines` パラメータで末尾N行のみ取得できます。
+
+
+## CI/CD: GitHub Webhook自動デプロイ
+
+GitHubにPushするだけで、本番サーバーが自動更新されます。
+
+```
+git push → GitHub Webhook → POST /webhook/github
+  → HMAC-SHA256署名検証 (WEBHOOK_SECRET)
+  → git pull → npm install → npx tsc
+  → process.exit(0) → systemd自動再起動
+  → 約5秒で新コードが本番稼働
+```
+
+### セットアップ
+
+1. `WEBHOOK_SECRET` を環境変数に設定
+2. GitHub → Settings → Webhooks → Add webhook:
+   - URL: `https://your-server.example.com/webhook/github`
+   - Content type: `application/json`
+   - Secret: `WEBHOOK_SECRET` の値
+   - Events: `push` のみ
+
+### 安全性
+
+- HMAC-SHA256で署名検証（`WEBHOOK_SECRET` 未設定なら検証スキップ）
+- `push` イベントのみ処理（ping等はスキップ）
+- デプロイ失敗時は旧コードのまま稼働継続（process.exitしない）
 
 
 ## 環境変数
@@ -406,6 +524,8 @@ AIは確認を求めますが、最終的な責任はユーザーにあります
 | 変数名 | 必須 | デフォルト | 説明 |
 |:--|:--:|:--|:--|
 | `ADMIN_KEY` | ✓ | — | 管理者APIキー |
+| `BLOCKED_HOSTS` | 推奨 | — | SSH接続をブロックするホスト（カンマ区切り）。サーバー自身のIPとホスト名を設定 |
+| `WEBHOOK_SECRET` | — | — | GitHub Webhook署名検証用シークレット |
 | `PORT` | — | `3000` | HTTPリッスンポート |
 | `DATA_DIR` | — | `cwd()` | user-keys.json保存先 |
 
@@ -418,6 +538,15 @@ AIは確認を求めますが、最終的な責任はユーザーにあります
 **Q: 3ヶ月放置したセッションは？**
 → 自動切断。`ssh_connect` で再接続してください。
 
+**Q: 長時間かかるコマンド（apt installなど）はどう扱う？**
+→ `ssh_execute(command="...", wait_ms=5000)` で5秒後に途中結果を取得。`ssh_command_status(command_id="cmd_0001")` で後からポーリング。`tail_lines=50` で末尾だけ取得も可能。
+
+**Q: サーバー自身にSSHできてしまわない？**
+→ `BLOCKED_HOSTS` 環境変数 + コード内蔵のlocalhost系ブロックで防御済み。ADMIN_KEYや環境変数の漏洩を防止します。
+
+**Q: GitHubにPushしたら自動デプロイされる？**
+→ はい。`WEBHOOK_SECRET` を設定してGitHub Webhookを登録すれば、Push → 約5秒で本番更新されます。
+
 **Q: User Keyを削除したら既存セッションは？**
 → TTL期限まで存続。session_tokenを知っていれば操作可能。ただしそのUser Keyでの新規接続や一覧表示はできなくなります。
 
@@ -428,7 +557,7 @@ AIは確認を求めますが、最終的な責任はユーザーにあります
 → はい。`ssh_connect` を複数回呼んで、それぞれ別のsession_tokenで操作できます。
 
 **Q: ?key= にAdmin KeyとUser Keyを両方入れたら？**
-→ 最強構成。User Keyでssh_connect、Admin Keyでuser_key管理、ssh_listは全セッション表示。1つのコネクターで全部できます。
+→ 最強構成。User Keyでssh_connect、Admin Keyでuser_key管理、ssh_listは全セッション表示。
 
 **Q: Claude Desktop / Claude Codeでも使える？**
 → はい。mcp-remoteでStreamable HTTPサーバーに接続できます（クイックスタート参照）。

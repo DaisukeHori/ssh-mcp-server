@@ -21,7 +21,7 @@
     <li><a href="getting-started.html" class="active">始め方</a></li>
     <li><a href="https://github.com/DaisukeHori/ssh-mcp-server" target="_blank">GitHub</a></li>
   </ul>
-  <span class="badge"><span class="badge__dot"></span> v2.1</span>
+  <span class="badge"><span class="badge__dot"></span> 11 Tools</span>
 </div></nav>
 
 <section class="section" style="padding-top:48px">
@@ -76,6 +76,8 @@ After=network.target
 Type=simple
 WorkingDirectory=/opt/ssh-mcp-server
 Environment=ADMIN_KEY=YOUR_ADMIN_KEY_HERE
+Environment=BLOCKED_HOSTS=$(hostname -I),$(hostname)
+Environment=WEBHOOK_SECRET=$(openssl rand -hex 20)
 Environment=PORT=3000
 ExecStart=/usr/bin/node dist/index.js
 Restart=always
@@ -186,24 +188,24 @@ https://your-server.example.com/mcp?key=YOUR_ADMIN_KEY&key=uk_84e17ac6...
       <p><code>ssh_list_sessions</code> で自分のセッション一覧を確認できます。</p>
     </div>
     <div class="card">
-      <h4>セッションが切れた</h4>
-      <p>3ヶ月使わないと自動切断。<code>ssh_connect</code> で再接続してください。</p>
+      <h4>長時間コマンドの扱い</h4>
+      <p><code>ssh_execute(wait_ms=5000)</code> で途中結果を取得。<code>ssh_command_status(command_id)</code> で後からポーリング。<code>tail_lines</code> で末尾だけ取得も可能。</p>
     </div>
     <div class="card">
-      <h4>複数サーバーに同時接続</h4>
-      <p><code>ssh_connect</code> を複数回呼べば、別々の session_token で操作できます。</p>
+      <h4>サーバー自身にSSHできる？</h4>
+      <p>いいえ。<code>BLOCKED_HOSTS</code> でサーバー自身のIPとホスト名をブロック。ADMIN_KEY等の環境変数漏洩を防止します。</p>
     </div>
     <div class="card">
-      <h4>session_tokenは共有できる？</h4>
-      <p>はい。SHA-256のケイパビリティトークン。持っていれば誰でも操作可能。</p>
+      <h4>GitHub Push で自動デプロイ？</h4>
+      <p><code>WEBHOOK_SECRET</code> を設定してGitHub Webhookを登録すれば、Push → 約5秒で自動更新。HMAC-SHA256署名検証付き。</p>
     </div>
     <div class="card">
-      <h4>Admin + User Keyを1つのコネクターで使える？</h4>
-      <p>はい。<code>?key=ak_xxx&key=uk_aaa</code> で管理もSSH接続も全部できます。</p>
+      <h4>Admin + User Keyを1つで？</h4>
+      <p><code>?key=ak_xxx&amp;key=uk_aaa</code> で管理もSSH接続も全部できます。</p>
     </div>
     <div class="card">
-      <h4>サーバーが再起動したら？</h4>
-      <p>全SSH接続が切断。User Keysは永続化されているので再接続可能です。</p>
+      <h4>サーバー再起動したら？</h4>
+      <p>全SSH接続が切断。User Keysは永続化されているので再接続可能。</p>
     </div>
   </div>
 </section>

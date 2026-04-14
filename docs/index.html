@@ -6,7 +6,7 @@
 <title>SSH MCP Server — Claude.aiをSSHクライアントにする</title>
 <meta name="description" content="Claude.aiからローカルネットワーク上の任意のサーバーにSSH接続。10のMCPツール + SHA-256ケイパビリティトークン + マルチキー認証で安全にリモート操作。">
 <meta name="author" content="Daisuke Hori">
-<meta property="og:title" content="SSH MCP Server — 10 Tools + Multi-Key Auth">
+<meta property="og:title" content="SSH MCP Server — 11 Tools + Async Commands">
 <meta property="og:description" content="Claude.aiをSSHクライアントにする。Proxmox管理からデプロイまで、ブラウザだけで。">
 <meta property="og:url" content="https://daisukehori.github.io/ssh-mcp-server">
 <meta property="og:locale" content="ja_JP">
@@ -27,12 +27,12 @@
     <li><a href="getting-started.html">始め方</a></li>
     <li><a href="https://github.com/DaisukeHori/ssh-mcp-server" target="_blank">GitHub</a></li>
   </ul>
-  <span class="badge"><span class="badge__dot"></span> v2.1</span>
+  <span class="badge"><span class="badge__dot"></span> 11 Tools</span>
 </div></nav>
 
 <section class="hero">
   <div class="hero__inner fade" id="hero-fade">
-    <div class="hero__tag"><span class="hero__tag-icon">⚡</span>10 Tools + SHA-256 Tokens + Multi-Key Auth</div>
+    <div class="hero__tag"><span class="hero__tag-icon">⚡</span>11 Tools + Async Commands + SHA-256 Tokens + Self-Protection</div>
     <h1>Claude.aiを<br><span>SSH</span>クライアントにする</h1>
     <p class="hero__sub">ブラウザのClaude.aiからローカルサーバーにSSH接続。Proxmox管理、デプロイ、ログ確認 — どこからでも。</p>
     <div class="hero__endpoint">
@@ -122,10 +122,12 @@
   <div class="section__label">🔢 NUMBERS</div>
   <h2 class="section__title">スペック</h2>
   <div class="specs">
-    <div class="spec"><div class="spec__value">10</div><div class="spec__label">MCPツール</div></div>
+    <div class="spec"><div class="spec__value">11</div><div class="spec__label">MCPツール</div></div>
     <div class="spec"><div class="spec__value">SHA-256</div><div class="spec__label">セッショントークン</div></div>
+    <div class="spec"><div class="spec__value">非同期</div><div class="spec__label">コマンド実行 + ポーリング</div></div>
     <div class="spec"><div class="spec__value">3ヶ月</div><div class="spec__label">セッションTTL (使用済)</div></div>
     <div class="spec"><div class="spec__value">3層</div><div class="spec__label">認証 + マルチキー</div></div>
+    <div class="spec"><div class="spec__value">自動</div><div class="spec__label">GitHub Webhook CI/CD</div></div>
   </div>
 </section>
 
@@ -155,12 +157,13 @@
 
 <section class="section">
   <div class="section__label">🛠️ TOOLS</div>
-  <h2 class="section__title">ツール一覧（10ツール）</h2>
+  <h2 class="section__title">ツール一覧（11ツール）</h2>
   <table class="tool-table">
     <thead><tr><th>ツール</th><th>Admin</th><th>User</th><th>token必要</th><th>説明</th></tr></thead>
     <tbody>
       <tr><td><code>ssh_connect</code></td><td>✗</td><td>✓</td><td>—</td><td>SSH接続 → session_token返却</td></tr>
-      <tr><td><code>ssh_execute</code></td><td>✓</td><td>✓</td><td>✓</td><td>シェルコマンド実行</td></tr>
+      <tr><td><code>ssh_execute</code></td><td>✓</td><td>✓</td><td>✓</td><td>コマンド実行（非同期対応・wait_ms・tail_lines）</td></tr>
+      <tr><td><code>ssh_command_status</code></td><td>✓</td><td>✓</td><td>—</td><td>実行中コマンドの結果をポーリング</td></tr>
       <tr><td><code>ssh_disconnect</code></td><td>✓</td><td>✓</td><td>✓</td><td>セッション切断</td></tr>
       <tr><td><code>ssh_list_sessions</code></td><td>✓全部</td><td>✓自分</td><td>—</td><td>セッション一覧</td></tr>
       <tr><td><code>ssh_upload_file</code></td><td>✓</td><td>✓</td><td>✓</td><td>SFTPファイル送信</td></tr>
