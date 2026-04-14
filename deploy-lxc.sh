@@ -10,7 +10,7 @@ LXC_ID="${LXC_ID:-400}"
 HOSTNAME="ssh-mcp"
 APP_DIR="/opt/ssh-mcp-server"
 PORT=3000
-TUNNEL_HOSTNAME="${TUNNEL_HOSTNAME:-ssh-mcp.appserver.tokyo}"
+TUNNEL_HOSTNAME="${TUNNEL_HOSTNAME:-your-server.example.com}"
 
 # Colors
 RED='\033[0;31m'

@@ -7,7 +7,7 @@
 [![MCP](https://img.shields.io/badge/MCP-Streamable_HTTP-8B5CF6.svg)](https://modelcontextprotocol.io/)
 [![Tools](https://img.shields.io/badge/Tools-10-10B981.svg)](#ツール一覧10ツール)
 
-> **エンドポイント:** `https://ssh-mcp.appserver.tokyo/mcp?key=YOUR_KEY`
+> **エンドポイント:** デプロイ後のURL `https://your-server.example.com/mcp?key=YOUR_KEY`
 > **LP:** [daisukehori.github.io/ssh-mcp-server](https://daisukehori.github.io/ssh-mcp-server/)
 
 Claude.aiのチャットから `ssh_connect` するだけで、ローカルネットワーク上のどのサーバーにもSSH接続。返ってくる `session_token` はSHA-256のケイパビリティトークン — 会話履歴に自然に残り、次のメッセージでそのまま使えます。
@@ -271,7 +271,7 @@ systemctl enable --now ssh-mcp-server
 ```yaml
 # cloudflaredのconfig.yml
 ingress:
-  - hostname: ssh-mcp.appserver.tokyo
+  - hostname: your-server.example.com
     service: http://localhost:3000
   - service: http_status:404
 ```
@@ -283,15 +283,15 @@ ingress:
 Admin + 自分のUser Keyを1つのコネクターで：
 
 1. まずAdmin Keyだけで接続し、User Keyを発行：
-   - URL: `https://ssh-mcp.appserver.tokyo/mcp?key=YOUR_ADMIN_KEY`
+   - URL: `https://your-server.example.com/mcp?key=YOUR_ADMIN_KEY`
    - チャット: `「horiというUser Keyを作って」`
 2. コネクターを更新（両方のキーを含む）：
-   - URL: `https://ssh-mcp.appserver.tokyo/mcp?key=YOUR_ADMIN_KEY&key=uk_発行されたキー`
+   - URL: `https://your-server.example.com/mcp?key=YOUR_ADMIN_KEY&key=uk_発行されたキー`
 
 **方法B: ユーザー用**
 
 発行されたUser Keyだけで接続：
-- URL: `https://ssh-mcp.appserver.tokyo/mcp?key=uk_発行されたキー`
+- URL: `https://your-server.example.com/mcp?key=uk_発行されたキー`
 
 **Claude Desktop / Cursor / VS Code:**
 ```json
@@ -300,7 +300,7 @@ Admin + 自分のUser Keyを1つのコネクターで：
     "ssh": {
       "command": "npx",
       "args": ["-y", "mcp-remote",
-        "https://ssh-mcp.appserver.tokyo/mcp?key=YOUR_KEY"]
+        "https://your-server.example.com/mcp?key=YOUR_KEY"]
     }
   }
 }
@@ -309,7 +309,7 @@ Admin + 自分のUser Keyを1つのコネクターで：
 **Claude Code:**
 ```bash
 claude mcp add --transport http ssh-mcp \
-  "https://ssh-mcp.appserver.tokyo/mcp?key=YOUR_KEY"
+  "https://your-server.example.com/mcp?key=YOUR_KEY"
 ```
 
 
@@ -320,7 +320,7 @@ claude mcp add --transport http ssh-mcp \
 ```
 あなた: 「Proxmoxに接続して」
 
-AI: ssh_connect(host="192.168.70.226", username="root", password="xxx")
+AI: ssh_connect(host="192.168.1.100", username="root", password="xxx")
     → session_token: sess_a3f8b2c1e7d4...
     接続しました。
 
