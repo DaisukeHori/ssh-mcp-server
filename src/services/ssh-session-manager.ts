@@ -3,6 +3,7 @@ import { Readable } from "stream";
 
 export interface SSHSession {
   id: string;
+  ownerId: string; // Token ID that owns this session
   client: Client;
   host: string;
   port: number;
@@ -20,6 +21,7 @@ export interface ConnectOptions {
   privateKey?: string;
   passphrase?: string;
   label?: string;
+  ownerId: string; // Token ID
 }
 
 export interface ExecResult {
@@ -100,6 +102,7 @@ export class SSHSessionManager {
         clearTimeout(timeout);
         const session: SSHSession = {
           id: sessionId,
+          ownerId: options.ownerId,
           client,
           host: options.host,
           port: options.port ?? 22,
@@ -129,15 +132,29 @@ export class SSHSessionManager {
     });
   }
 
-  async execute(
-    sessionId: string,
-    command: string,
-    timeoutMs: number = DEFAULT_EXEC_TIMEOUT_MS
-  ): Promise<ExecResult> {
+  /**
+   * Resolve a session by ID with ownership check.
+   * Admin tokens can access any session. Regular tokens can only access their own.
+   */
+  private resolveSession(sessionId: string, ownerId: string, isAdmin: boolean): SSHSession {
     const session = this.sessions.get(sessionId);
     if (!session) {
       throw new Error(`Session '${sessionId}' not found. Use ssh_list_sessions to see active sessions, or ssh_connect to create a new one.`);
     }
+    if (!isAdmin && session.ownerId !== ownerId) {
+      throw new Error(`Session '${sessionId}' belongs to another token. You can only access your own sessions.`);
+    }
+    return session;
+  }
+
+  async execute(
+    sessionId: string,
+    command: string,
+    ownerId: string,
+    isAdmin: boolean,
+    timeoutMs: number = DEFAULT_EXEC_TIMEOUT_MS
+  ): Promise<ExecResult> {
+    const session = this.resolveSession(sessionId, ownerId, isAdmin);
 
     session.lastUsedAt = new Date();
 
@@ -208,12 +225,11 @@ export class SSHSessionManager {
   async uploadFile(
     sessionId: string,
     localContent: string,
-    remotePath: string
+    remotePath: string,
+    ownerId: string,
+    isAdmin: boolean
   ): Promise<void> {
-    const session = this.sessions.get(sessionId);
-    if (!session) {
-      throw new Error(`Session '${sessionId}' not found.`);
-    }
+    const session = this.resolveSession(sessionId, ownerId, isAdmin);
 
     session.lastUsedAt = new Date();
 
@@ -242,12 +258,11 @@ export class SSHSessionManager {
 
   async downloadFile(
     sessionId: string,
-    remotePath: string
+    remotePath: string,
+    ownerId: string,
+    isAdmin: boolean
   ): Promise<string> {
-    const session = this.sessions.get(sessionId);
-    if (!session) {
-      throw new Error(`Session '${sessionId}' not found.`);
-    }
+    const session = this.resolveSession(sessionId, ownerId, isAdmin);
 
     session.lastUsedAt = new Date();
 
@@ -287,9 +302,14 @@ export class SSHSessionManager {
     });
   }
 
-  disconnect(sessionId: string): boolean {
+  disconnect(sessionId: string, ownerId?: string, isAdmin?: boolean): boolean {
     const session = this.sessions.get(sessionId);
     if (!session) {
+      return false;
+    }
+
+    // If ownerId is provided, check ownership (unless admin)
+    if (ownerId && !isAdmin && session.ownerId !== ownerId) {
       return false;
     }
 
@@ -303,9 +323,13 @@ export class SSHSessionManager {
     return true;
   }
 
-  disconnectAll(): number {
+  disconnectAll(ownerId?: string, isAdmin?: boolean): number {
     let count = 0;
-    for (const [id] of this.sessions) {
+    for (const [id, session] of this.sessions) {
+      // If scoped, only disconnect own sessions (unless admin)
+      if (ownerId && !isAdmin && session.ownerId !== ownerId) {
+        continue;
+      }
       if (this.disconnect(id)) {
         count++;
       }
@@ -313,8 +337,9 @@ export class SSHSessionManager {
     return count;
   }
 
-  listSessions(): Array<{
+  listSessions(ownerId?: string, isAdmin?: boolean): Array<{
     id: string;
+    ownerId: string;
     host: string;
     port: number;
     username: string;
@@ -324,16 +349,23 @@ export class SSHSessionManager {
     label?: string;
   }> {
     const now = Date.now();
-    return Array.from(this.sessions.values()).map((s) => ({
-      id: s.id,
-      host: s.host,
-      port: s.port,
-      username: s.username,
-      connectedAt: s.connectedAt.toISOString(),
-      lastUsedAt: s.lastUsedAt.toISOString(),
-      idleSeconds: Math.round((now - s.lastUsedAt.getTime()) / 1000),
-      ...(s.label ? { label: s.label } : {}),
-    }));
+    return Array.from(this.sessions.values())
+      .filter((s) => {
+        if (!ownerId) return true; // No scope = show all
+        if (isAdmin) return true; // Admin sees all
+        return s.ownerId === ownerId;
+      })
+      .map((s) => ({
+        id: s.id,
+        ownerId: s.ownerId,
+        host: s.host,
+        port: s.port,
+        username: s.username,
+        connectedAt: s.connectedAt.toISOString(),
+        lastUsedAt: s.lastUsedAt.toISOString(),
+        idleSeconds: Math.round((now - s.lastUsedAt.getTime()) / 1000),
+        ...(s.label ? { label: s.label } : {}),
+      }));
   }
 
   getSession(sessionId: string): SSHSession | undefined {

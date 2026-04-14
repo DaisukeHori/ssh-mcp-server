@@ -2,7 +2,23 @@ import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { z } from "zod";
 import { SSHSessionManager } from "../services/ssh-session-manager.js";
 
-export function registerSSHTools(server: McpServer, manager: SSHSessionManager): void {
+/**
+ * Caller context injected by the auth middleware.
+ * The tools closure captures this so each request knows who's calling.
+ */
+export interface CallerContext {
+  tokenId: string;
+  isAdmin: boolean;
+  label: string;
+}
+
+export function registerSSHTools(
+  server: McpServer,
+  manager: SSHSessionManager,
+  caller: CallerContext
+): void {
+  const { tokenId, isAdmin } = caller;
+
   // ─────────────────────────────────────────────
   // ssh_connect
   // ─────────────────────────────────────────────
@@ -10,7 +26,7 @@ export function registerSSHTools(server: McpServer, manager: SSHSessionManager):
     "ssh_connect",
     {
       title: "SSH接続",
-      description: `Establish a new SSH connection to a remote host. The connection is kept alive server-side and can be reused across multiple tool calls via its session ID.
+      description: `Establish a new SSH connection to a remote host. The connection is kept alive server-side and can be reused across multiple tool calls via its session ID. Sessions are scoped to your API token.
 
 Args:
   - host (string): Hostname or IP address (e.g. "192.168.70.226")
@@ -22,12 +38,7 @@ Args:
   - label (string, optional): Human-readable label (e.g. "proxmox-host")
 
 Returns:
-  JSON with session_id, host, username, and connection details.
-
-Examples:
-  - Connect to Proxmox: host="192.168.70.226", username="root", password="xxx"
-  - Connect with key: host="10.0.0.5", username="deploy", private_key="-----BEGIN OPENSSH..."
-  - Connect with label: host="192.168.70.100", username="root", password="xxx", label="lxc-web-01"`,
+  JSON with session_id, host, username, and connection details.`,
       inputSchema: {
         host: z.string().min(1).describe("Hostname or IP address"),
         port: z.number().int().min(1).max(65535).default(22).describe("SSH port (default: 22)"),
@@ -54,6 +65,7 @@ Examples:
           privateKey: params.private_key,
           passphrase: params.passphrase,
           label: params.label,
+          ownerId: tokenId,
         });
 
         const result = {
@@ -91,20 +103,10 @@ Examples:
 Args:
   - session_id (string): Session ID from ssh_connect
   - command (string): Shell command to execute
-  - timeout_ms (number, optional): Timeout in milliseconds (default: 120000 = 2 minutes, max: 600000 = 10 minutes)
+  - timeout_ms (number, optional): Timeout in milliseconds (default: 120000 = 2min, max: 600000 = 10min)
 
 Returns:
-  JSON with exit_code, stdout, stderr, and duration_ms.
-
-Examples:
-  - Check uptime: command="uptime"
-  - List containers: command="pct list"
-  - Multi-command: command="cd /opt/app && git pull && npm run build"
-  - Long-running: command="apt update && apt upgrade -y", timeout_ms=300000
-
-Error Handling:
-  - If session not found, reconnect with ssh_connect
-  - If command times out, try increasing timeout_ms or splitting the command`,
+  JSON with exit_code, stdout, stderr, and duration_ms.`,
       inputSchema: {
         session_id: z.string().min(1).describe("Session ID from ssh_connect"),
         command: z.string().min(1).max(10000).describe("Shell command to execute"),
@@ -128,6 +130,8 @@ Error Handling:
         const result = await manager.execute(
           params.session_id,
           params.command,
+          tokenId,
+          isAdmin,
           params.timeout_ms
         );
 
@@ -159,18 +163,15 @@ Error Handling:
     "ssh_disconnect",
     {
       title: "SSH切断",
-      description: `Disconnect an SSH session. Optionally disconnect all sessions at once.
+      description: `Disconnect an SSH session. Omit session_id to disconnect all YOUR sessions (admin: all sessions).
 
 Args:
-  - session_id (string, optional): Session ID to disconnect. Omit to disconnect ALL sessions.
-
-Returns:
-  Confirmation message with disconnected session details.`,
+  - session_id (string, optional): Session ID to disconnect. Omit to disconnect all.`,
       inputSchema: {
         session_id: z
           .string()
           .optional()
-          .describe("Session ID to disconnect. Omit to disconnect all sessions."),
+          .describe("Session ID to disconnect. Omit to disconnect all your sessions."),
       },
       annotations: {
         readOnlyHint: false,
@@ -181,7 +182,7 @@ Returns:
     },
     async (params) => {
       if (params.session_id) {
-        const success = manager.disconnect(params.session_id);
+        const success = manager.disconnect(params.session_id, tokenId, isAdmin);
         if (success) {
           return {
             content: [
@@ -189,7 +190,7 @@ Returns:
                 type: "text",
                 text: JSON.stringify({
                   disconnected: params.session_id,
-                  remaining_sessions: manager.sessionCount,
+                  remaining_sessions: manager.listSessions(tokenId, isAdmin).length,
                 }),
               },
             ],
@@ -200,20 +201,20 @@ Returns:
             content: [
               {
                 type: "text",
-                text: `Session '${params.session_id}' not found. Use ssh_list_sessions to see active sessions.`,
+                text: `Session '${params.session_id}' not found or not owned by you.`,
               },
             ],
           };
         }
       } else {
-        const count = manager.disconnectAll();
+        const count = manager.disconnectAll(tokenId, isAdmin);
         return {
           content: [
             {
               type: "text",
               text: JSON.stringify({
                 disconnected_count: count,
-                message: `All ${count} session(s) disconnected.`,
+                message: `${count} session(s) disconnected.`,
               }),
             },
           ],
@@ -229,11 +230,10 @@ Returns:
     "ssh_list_sessions",
     {
       title: "SSHセッション一覧",
-      description: `List all active SSH sessions with their connection details, idle time, and labels.
+      description: `List active SSH sessions. Regular tokens see only their own sessions. Admin tokens see all sessions.
 
 Returns:
-  JSON array of sessions with id, host, port, username, connectedAt, lastUsedAt, idleSeconds, and label.
-  Sessions idle for more than 30 minutes are automatically cleaned up.`,
+  JSON array of sessions with id, ownerId, host, port, username, timestamps, and idle time.`,
       inputSchema: {},
       annotations: {
         readOnlyHint: true,
@@ -243,7 +243,7 @@ Returns:
       },
     },
     async () => {
-      const sessions = manager.listSessions();
+      const sessions = manager.listSessions(tokenId, isAdmin);
       return {
         content: [
           {
@@ -251,6 +251,7 @@ Returns:
             text: JSON.stringify(
               {
                 total: sessions.length,
+                caller: { tokenId, isAdmin },
                 sessions,
               },
               null,
@@ -274,24 +275,11 @@ Returns:
 Args:
   - session_id (string): Session ID from ssh_connect
   - content (string): File content to upload (text only, max ~1MB)
-  - remote_path (string): Absolute path on the remote host (e.g. "/tmp/script.sh")
-
-Returns:
-  Confirmation with remote path and size.
-
-Examples:
-  - Upload config: content="server { listen 80; }", remote_path="/etc/nginx/conf.d/app.conf"
-  - Upload script: content="#!/bin/bash\\necho hello", remote_path="/tmp/test.sh"`,
+  - remote_path (string): Absolute path on the remote host`,
       inputSchema: {
         session_id: z.string().min(1).describe("Session ID from ssh_connect"),
-        content: z
-          .string()
-          .max(1048576)
-          .describe("File content to upload (text, max ~1MB)"),
-        remote_path: z
-          .string()
-          .min(1)
-          .describe("Absolute path on the remote host"),
+        content: z.string().max(1048576).describe("File content to upload (text, max ~1MB)"),
+        remote_path: z.string().min(1).describe("Absolute path on the remote host"),
       },
       annotations: {
         readOnlyHint: false,
@@ -305,7 +293,9 @@ Examples:
         await manager.uploadFile(
           params.session_id,
           params.content,
-          params.remote_path
+          params.remote_path,
+          tokenId,
+          isAdmin
         );
 
         return {
@@ -343,16 +333,10 @@ Args:
   - session_id (string): Session ID from ssh_connect
   - remote_path (string): Absolute path on the remote host
 
-Returns:
-  JSON with file path and content.
-
 For large files, use ssh_execute with 'head', 'tail', or 'cat | head -c 100000' instead.`,
       inputSchema: {
         session_id: z.string().min(1).describe("Session ID from ssh_connect"),
-        remote_path: z
-          .string()
-          .min(1)
-          .describe("Absolute path on the remote host"),
+        remote_path: z.string().min(1).describe("Absolute path on the remote host"),
       },
       annotations: {
         readOnlyHint: true,
@@ -365,7 +349,9 @@ For large files, use ssh_execute with 'head', 'tail', or 'cat | head -c 100000' 
       try {
         const content = await manager.downloadFile(
           params.session_id,
-          params.remote_path
+          params.remote_path,
+          tokenId,
+          isAdmin
         );
 
         return {
