@@ -51,7 +51,7 @@ jobs:
             重要ルール:
             - コミットメッセージ、PRタイトル、PR本文、コメントはすべて日本語で記述すること
             - PRタイトル例: 「修正: HubSpot API v5 対応」「修正: ヘルスチェック障害対応」
-          claude_args: "--max-turns 50 --dangerously-skip-permissions --model claude-opus-4-6"
+          claude_args: "--max-turns 100 --dangerously-skip-permissions --model claude-opus-4-6"
 
   # ── PR ビルドチェック → 自動マージ ──
   auto-merge:
