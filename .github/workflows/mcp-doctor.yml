@@ -42,25 +42,12 @@ jobs:
         with:
           claude_code_oauth_token: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}
           prompt: |
-            このIssueで報告されている問題を修正してください。
-
-            ## 手順
-            1. Issue本文のチェンジログURLまたはエラー内容を確認
-            2. 上流APIの変更がこのMCPサーバーにどう影響するか調査
-            3. 影響を受けるツールのコードを修正
-            4. `npm run build` と `npx tsc --noEmit` でビルド確認
-            5. 修正をコミットし、PRを作成
-               - ブランチ名: fix/mcp-doctor-{issue番号}
-               - PRタイトル: fix: {変更内容の要約}
-               - PR本文に Closes #{issue番号} を含める
-               - PRに mcp-doctor ラベルを付ける
-
-            ## ルール
-            - CLAUDE.md のプロジェクト規約に従う
-            - 認証情報をハードコードしない
-            - ビルドが通らない修正はPRにしない
-            - 修正に自信がない場合はIssueにコメントで報告して終了
-          claude_args: "--max-turns 20"
+            このIssueの内容に従って修正してください。
+            CLAUDE.md を読んでプロジェクト規約を理解し、
+            必要なコード修正を行い、ビルド確認（npm run build）後、
+            変更をコミットしてPRを作成してください。
+            PRには mcp-doctor ラベルを付けてください。
+          claude_args: "--max-turns 50"
 
   # ── PR ビルドチェック → 自動マージ ──
   auto-merge:
