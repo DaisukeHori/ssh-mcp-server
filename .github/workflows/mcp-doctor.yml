@@ -1,0 +1,98 @@
+# MCP Doctor Auto-Fix + Auto-Merge
+#
+# mcp-doctor ラベル付き Issue が作成されたら:
+# 1. Claude Code が Issue を読み、コード修正、PR 作成
+# 2. PR のビルドチェック通過後、自動マージ
+#
+# 必要な Secrets:
+#   CLAUDE_CODE_OAUTH_TOKEN - claude setup-token で取得（Max サブスク内）
+
+name: MCP Doctor - Auto Fix
+
+on:
+  issues:
+    types: [opened, labeled]
+  pull_request:
+    types: [opened, synchronize, labeled]
+
+permissions:
+  contents: write
+  pull-requests: write
+  issues: write
+  id-token: write
+
+jobs:
+  # ── Issue → Claude Code で修正 → PR 作成 ──
+  auto-fix:
+    if: >-
+      github.event_name == 'issues' &&
+      contains(github.event.issue.labels.*.name, 'mcp-doctor')
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+          cache: "npm"
+
+      - run: npm ci
+
+      - uses: anthropics/claude-code-action@v1
+        with:
+          claude_code_oauth_token: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}
+          prompt: |
+            このIssueで報告されている問題を修正してください。
+
+            ## 手順
+            1. Issue本文のチェンジログURLまたはエラー内容を確認
+            2. 上流APIの変更がこのMCPサーバーにどう影響するか調査
+            3. 影響を受けるツールのコードを修正
+            4. `npm run build` と `npx tsc --noEmit` でビルド確認
+            5. 修正をコミットし、PRを作成
+               - ブランチ名: fix/mcp-doctor-{issue番号}
+               - PRタイトル: fix: {変更内容の要約}
+               - PR本文に Closes #{issue番号} を含める
+               - PRに mcp-doctor ラベルを付ける
+
+            ## ルール
+            - CLAUDE.md のプロジェクト規約に従う
+            - 認証情報をハードコードしない
+            - ビルドが通らない修正はPRにしない
+            - 修正に自信がない場合はIssueにコメントで報告して終了
+          claude_args: "--max-turns 20"
+
+  # ── PR ビルドチェック → 自動マージ ──
+  auto-merge:
+    if: >-
+      github.event_name == 'pull_request' &&
+      contains(github.event.pull_request.labels.*.name, 'mcp-doctor')
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.pull_request.head.sha }}
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+          cache: "npm"
+
+      - run: npm ci
+
+      - name: Build check
+        run: npm run build
+
+      - name: Type check
+        run: npx tsc --noEmit
+
+      - name: Auto-merge PR
+        if: success()
+        run: |
+          gh pr merge ${{ github.event.pull_request.number }} \
+            --squash \
+            --auto \
+            --delete-branch \
+            --subject "fix: mcp-doctor auto-fix (#${{ github.event.pull_request.number }})"
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
