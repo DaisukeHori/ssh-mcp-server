@@ -47,8 +47,7 @@ jobs:
             必要なコード修正を行い、ビルド確認（npm run build）後、
             変更をコミットしてPRを作成してください。
             PRには mcp-doctor ラベルを付けてください。
-          allowed_tools: "Bash,View,GlobTool,GrepTool,Write,Edit,MultiEdit"
-          claude_args: "--max-turns 50"
+          claude_args: "--max-turns 50 --dangerously-skip-permissions"
 
   # ── PR ビルドチェック → 自動マージ ──
   auto-merge:
