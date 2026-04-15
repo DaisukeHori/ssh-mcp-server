@@ -47,7 +47,11 @@ jobs:
             必要なコード修正を行い、ビルド確認（npm run build）後、
             変更をコミットしてPRを作成してください。
             PRには mcp-doctor ラベルを付けてください。
-          claude_args: "--max-turns 50 --dangerously-skip-permissions"
+
+            重要ルール:
+            - コミットメッセージ、PRタイトル、PR本文、コメントはすべて日本語で記述すること
+            - PRタイトル例: 「修正: HubSpot API v5 対応」「修正: ヘルスチェック障害対応」
+          claude_args: "--max-turns 50 --dangerously-skip-permissions --model claude-opus-4-6"
 
   # ── PR ビルドチェック → 自動マージ ──
   auto-merge:
